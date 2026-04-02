@@ -2,7 +2,7 @@
 
 # AniWorld Downloader v4
 
-AniWorld Downloader is a cross-platform tool for streaming and downloading anime from aniworld.to, as well as series from s.to. It runs on Windows, macOS, and Linux, providing a seamless experience for offline viewing or instant playback.
+AniWorld Downloader is a cross-platform tool for streaming and downloading anime from aniworld.to, as well as series from s.to. It runs on Windows, macOS, and Linux and includes a heavily expanded Web UI with favorites, queue controls, auto-sync management, dedicated stats pages, and a cleaner navigation flow for daily use.
 
 ![GitHub Release](https://img.shields.io/github/v/release/phoenixthrush/AniWorld-Downloader)
 [![PyPI Downloads](https://static.pepy.tech/badge/aniworld)](https://pepy.tech/projects/aniworld)
@@ -36,6 +36,39 @@ aniworld -w
 
 > **Tip**: Use the stable release for general use. The GitHub version includes the latest features and fixes but may be less stable.
 
+### Running this customized source build locally
+
+If you are working from this source tree instead of a PyPI release, start it from the project folder:
+
+```powershell
+cd C:\Users\ginow\Desktop\EasyCrashX\AniWorld-Downloader-models
+py -m pip install -e .
+py -m aniworld -w
+```
+
+Expose the Web UI to your local network if needed:
+
+```powershell
+py -m aniworld -w --web-expose
+```
+
+> **Windows note:** The Web UI is the recommended mode on modern Windows Python installs. Terminal mode may still depend on `curses` availability.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Custom Build Notes
+
+This repository currently contains a customized Web UI build with these notable changes:
+
+- redesigned Web UI shell with dedicated `Browse`, `Stats`, `Queue`, and `Settings` areas
+- separate `Stats`, `Timeline`, `Radar`, `Library`, `Favorites`, and `Auto-Sync` views
+- improved queue modal with retry actions, progress bars, ETA, bandwidth display, and live updates for active downloads
+- persistent download statistics backed by an archive, so clearing finished queue items no longer resets stats
+- expanded library browsing with locations, language filters, posters, and series references
+- search improvements, favorites support, and navigation badges
+- mobile-oriented layout cleanup for the main Web UI flows
+- no PWA / service worker caching in the local Web UI build to avoid stale-state and loading issues
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Still in Development
@@ -62,6 +95,26 @@ This project is actively being improved. Current work in progress includes:
 - **Group Watching** – Sync anime and series sessions with friends via **Syncplay**
 - **Web Interface** – Browse, download, and manage your queue with a modern web UI
 - **Docker Ready** – Deploy easily using **Docker** or **Docker Compose**
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Web UI Highlights
+
+- **Browse** - Search AniWorld and SerienStream, inspect series, and start downloads from one modal flow
+- **Library** - Explore downloaded content by location, language, season, episode, and poster-backed series cards
+- **Favorites** - Pin important series for quick reopening
+- **Stats** - See totals, storage usage, provider quality, and activity charts
+- **Timeline** - Review recent completed, failed, or cancelled jobs
+- **Radar** - Check recently released episodes
+- **Queue** - Watch active download progress, bandwidth, retries, captcha state, and cleanup actions
+- **Settings / Auto-Sync** - Manage download defaults, storage paths, and tracked-series sync jobs
+
+## Notes About Current Web UI Behavior
+
+- clearing finished queue items keeps the long-term stats intact because stats are now backed by a separate archive
+- the queue modal refreshes active download progress without requiring a full page reload
+- local PWA / service-worker caching has been removed to avoid stale-state and hanging-page issues
+- favorites, stats pages, and badges now use smaller targeted requests instead of one heavy catch-all dashboard request
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
