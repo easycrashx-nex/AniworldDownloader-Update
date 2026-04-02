@@ -4,6 +4,14 @@
   let reconnectTimer = null;
   let connected = false;
 
+  function hasSubscribers() {
+    return subscribers.length > 0;
+  }
+
+  function shouldConnect() {
+    return "EventSource" in window && hasSubscribers() && !document.hidden;
+  }
+
   function notify(payload) {
     const channels = new Set(payload.channels || []);
     subscribers.forEach((subscriber) => {
@@ -31,8 +39,8 @@
   }
 
   function connect() {
-    if (!("EventSource" in window)) return;
-    cleanup();
+    if (!shouldConnect()) return;
+    if (eventSource) return;
     eventSource = new EventSource("/api/events");
 
     eventSource.addEventListener("open", () => {
@@ -70,12 +78,22 @@
         handler,
       };
       subscribers.push(entry);
+      connect();
       return function unsubscribe() {
         const index = subscribers.indexOf(entry);
         if (index >= 0) subscribers.splice(index, 1);
+        if (!hasSubscribers()) cleanup();
       };
     },
   };
 
-  connect();
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      cleanup();
+      return;
+    }
+    connect();
+  });
+
+  window.addEventListener("beforeunload", cleanup);
 })();

@@ -5,36 +5,44 @@ const disableEnglishSubCb = document.getElementById("disableEnglishSub");
 const syncScheduleSelect = document.getElementById("syncSchedule");
 const syncLanguageSelect = document.getElementById("syncLanguage");
 const syncProviderSelect = document.getElementById("syncProvider");
+let settingsRequest = null;
+let customPathsRequest = null;
 
 async function loadSettings() {
-  try {
-    const resp = await fetch("/api/settings");
-    const data = await resp.json();
-    downloadPathInput.value = data.download_path || "";
-    if (langSeparationCb)
-      langSeparationCb.checked = data.lang_separation === "1";
-    if (disableEnglishSubCb)
-      disableEnglishSubCb.checked = data.disable_english_sub === "1";
-    if (syncScheduleSelect && data.sync_schedule)
-      syncScheduleSelect.value = data.sync_schedule;
+  if (settingsRequest) return settingsRequest;
+  settingsRequest = (async () => {
+    try {
+      const resp = await fetch("/api/settings");
+      const data = await resp.json();
+      downloadPathInput.value = data.download_path || "";
+      if (langSeparationCb)
+        langSeparationCb.checked = data.lang_separation === "1";
+      if (disableEnglishSubCb)
+        disableEnglishSubCb.checked = data.disable_english_sub === "1";
+      if (syncScheduleSelect && data.sync_schedule)
+        syncScheduleSelect.value = data.sync_schedule;
 
-    const isLangSep = data.lang_separation === "1";
-    let currentSyncLang = data.sync_language;
-    if (currentSyncLang === "All Languages" && !isLangSep) {
-      currentSyncLang = "German Dub";
-    }
-    updateSyncLanguageDropdown(isLangSep, currentSyncLang);
+      const isLangSep = data.lang_separation === "1";
+      let currentSyncLang = data.sync_language;
+      if (currentSyncLang === "All Languages" && !isLangSep) {
+        currentSyncLang = "German Dub";
+      }
+      updateSyncLanguageDropdown(isLangSep, currentSyncLang);
 
-    if (syncProviderSelect && data.sync_provider)
-      syncProviderSelect.value = data.sync_provider;
-    if (window.refreshCustomSelect) {
-      if (syncScheduleSelect) window.refreshCustomSelect(syncScheduleSelect);
-      if (syncLanguageSelect) window.refreshCustomSelect(syncLanguageSelect);
-      if (syncProviderSelect) window.refreshCustomSelect(syncProviderSelect);
+      if (syncProviderSelect && data.sync_provider)
+        syncProviderSelect.value = data.sync_provider;
+      if (window.refreshCustomSelect) {
+        if (syncScheduleSelect) window.refreshCustomSelect(syncScheduleSelect);
+        if (syncLanguageSelect) window.refreshCustomSelect(syncLanguageSelect);
+        if (syncProviderSelect) window.refreshCustomSelect(syncProviderSelect);
+      }
+    } catch (e) {
+      showToast("Failed to load settings: " + e.message);
+    } finally {
+      settingsRequest = null;
     }
-  } catch (e) {
-    showToast("Failed to load settings: " + e.message);
-  }
+  })();
+  return settingsRequest;
 }
 
 async function saveLangSeparation() {
@@ -178,13 +186,19 @@ if (customPathsBody) {
 
 async function loadCustomPaths() {
   if (!customPathsBody) return;
-  try {
-    const resp = await fetch("/api/custom-paths");
-    const data = await resp.json();
-    renderCustomPaths(data.paths || []);
-  } catch (e) {
-    showToast("Failed to load custom paths: " + e.message);
-  }
+  if (customPathsRequest) return customPathsRequest;
+  customPathsRequest = (async () => {
+    try {
+      const resp = await fetch("/api/custom-paths");
+      const data = await resp.json();
+      renderCustomPaths(data.paths || []);
+    } catch (e) {
+      showToast("Failed to load custom paths: " + e.message);
+    } finally {
+      customPathsRequest = null;
+    }
+  })();
+  return customPathsRequest;
 }
 
 function renderCustomPaths(paths) {
@@ -310,7 +324,7 @@ function renderUsers(users) {
 }
 
 if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
-  window.LiveUpdates.subscribe(["settings", "autosync", "library"], () => {
+  window.LiveUpdates.subscribe(["settings"], () => {
     loadSettings();
     loadCustomPaths();
   });

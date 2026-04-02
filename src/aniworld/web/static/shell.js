@@ -5,6 +5,7 @@
   const queueBadge = document.getElementById("queueBadge");
   const navMenus = Array.from(document.querySelectorAll(".nav-menu"));
   let navFallbackTimer = null;
+  let navRequest = null;
 
   function setBadge(node, value) {
     if (!node) return;
@@ -18,16 +19,24 @@
   }
 
   async function loadNavState() {
-    try {
-      const resp = await fetch("/api/nav");
-      const data = await resp.json();
-      setBadge(browseBadge, data.favorites);
-      setBadge(statsBadge, data.failed_queue);
-      setBadge(settingsBadge, data.autosync_enabled);
-      setBadge(queueBadge, data.active_queue);
-    } catch (e) {
-      /* ignore */
-    }
+    if (navRequest) return navRequest;
+
+    navRequest = (async () => {
+      try {
+        const resp = await fetch("/api/nav");
+        const data = await resp.json();
+        setBadge(browseBadge, data.favorites);
+        setBadge(statsBadge, data.failed_queue);
+        setBadge(settingsBadge, data.autosync_enabled);
+        setBadge(queueBadge, data.active_queue);
+      } catch (e) {
+        /* ignore */
+      } finally {
+        navRequest = null;
+      }
+    })();
+
+    return navRequest;
   }
 
   function closeNavMenus() {
@@ -64,10 +73,7 @@
   loadNavState();
 
   if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
-    window.LiveUpdates.subscribe(
-      ["nav", "queue", "favorites", "autosync", "dashboard"],
-      () => loadNavState(),
-    );
+    window.LiveUpdates.subscribe(["nav"], () => loadNavState());
   }
 
   navFallbackTimer = setInterval(() => {
@@ -76,9 +82,35 @@
     }
   }, 90000);
 
+  async function cleanupServiceWorkers() {
+    try {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      if (registrations.length) {
+        await Promise.all(
+          registrations.map((registration) => registration.unregister()),
+        );
+      }
+
+      if ("caches" in window) {
+        const cacheKeys = await caches.keys();
+        await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+      }
+
+      if (
+        navigator.serviceWorker.controller &&
+        !sessionStorage.getItem("aniworld-sw-cleaned")
+      ) {
+        sessionStorage.setItem("aniworld-sw-cleaned", "1");
+        window.location.reload();
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+      cleanupServiceWorkers();
     });
   }
 })();

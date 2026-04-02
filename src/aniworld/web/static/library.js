@@ -1,6 +1,7 @@
 let libraryAllLocations = [];
 let libraryLocations = [];
 var libraryLangSep = false;
+let libraryRequest = null;
 
 const librarySearchInput = document.getElementById("librarySearchInput");
 const libraryLocationFilter = document.getElementById("libraryLocationFilter");
@@ -124,18 +125,24 @@ function restoreExpandedState(state) {
 }
 
 async function loadLibrary() {
+  if (libraryRequest) return libraryRequest;
   var list = document.getElementById("libraryList");
   list.innerHTML = '<div class="library-empty">Loading...</div>';
-  try {
-    var resp = await fetch("/api/library");
-    var data = await resp.json();
-    libraryAllLocations = data.locations || [];
-    libraryLangSep = !!data.lang_sep;
-    populateLibraryFilters();
-    applyLibraryFilters();
-  } catch (e) {
-    list.innerHTML = '<div class="library-empty">Failed to load library</div>';
-  }
+  libraryRequest = (async function () {
+    try {
+      var resp = await fetch("/api/library");
+      var data = await resp.json();
+      libraryAllLocations = data.locations || [];
+      libraryLangSep = !!data.lang_sep;
+      populateLibraryFilters();
+      applyLibraryFilters();
+    } catch (e) {
+      list.innerHTML = '<div class="library-empty">Failed to load library</div>';
+    } finally {
+      libraryRequest = null;
+    }
+  })();
+  return libraryRequest;
 }
 
 function populateLibraryFilters() {
@@ -662,7 +669,7 @@ if (libraryLanguageFilter) {
 loadLibrary();
 
 if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
-  window.LiveUpdates.subscribe(["library", "settings", "favorites"], function () {
+  window.LiveUpdates.subscribe(["library", "settings"], function () {
     loadLibrary();
   });
 }

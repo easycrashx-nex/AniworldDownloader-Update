@@ -44,25 +44,23 @@ const isHomePage = Boolean(
     seasonAccordion &&
     browseDiv,
 );
-const hasDashboardSurface = Boolean(
-  statsGrid ||
-    statsDetailGrid ||
-    favoritesList ||
-    activityList ||
-    providerQualityList ||
-    activityChart ||
-    releaseList,
+const isStatsPage = Boolean(
+  statsGrid || statsDetailGrid || providerQualityList || activityChart,
+);
+const isTimelinePage = Boolean(
+  activityList && !isStatsPage && !releaseList && !favoritesList,
+);
+const isRadarPage = Boolean(
+  releaseList && !isStatsPage && !activityList && !favoritesList,
 );
 const isStandaloneFavoritesPage = Boolean(
   favoritesList &&
     !isHomePage &&
-    !statsGrid &&
-    !statsDetailGrid &&
-    !activityList &&
-    !providerQualityList &&
-    !activityChart &&
-    !releaseList,
+    !isStatsPage &&
+    !isTimelinePage &&
+    !isRadarPage,
 );
+const hasFavoritesSurface = Boolean(favoritesList && (isHomePage || isStandaloneFavoritesPage));
 
 let currentSeasons = [];
 let currentSeriesTitle = "";
@@ -86,6 +84,10 @@ let dashboardInitialized = false;
 let lastNotificationState = { recentId: null, syncStamp: null };
 let searchSuggestTimer = null;
 let dashboardFallbackTimer = null;
+let statsRequest = null;
+let favoritesRequest = null;
+let timelineRequest = null;
+let radarRequest = null;
 
 // Custom paths select
 const customPathSelect = document.getElementById("customPathSelect");
@@ -539,28 +541,117 @@ function renderStatsError() {
   }
 }
 
-async function loadDashboardStats() {
-  if (!hasDashboardSurface || isStandaloneFavoritesPage) return;
-  try {
-    const resp = await fetch("/api/dashboard");
-    const data = await resp.json();
-    renderDashboard(data);
-  } catch (e) {
-    renderStatsError();
+async function fetchJson(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    throw new Error(`Request failed for ${url}: ${resp.status}`);
   }
+  return resp.json();
 }
 
-async function loadFavoritesPage() {
-  if (!favoritesList) return;
-  try {
-    const resp = await fetch("/api/favorites");
-    const data = await resp.json();
-    renderFavorites(data.items || []);
-    syncFavoriteMap(data.items || []);
-  } catch (e) {
-    favoritesList.innerHTML =
-      '<div class="stats-empty">Favorites could not be loaded.</div>';
-  }
+async function loadStatsPage() {
+  if (!isStatsPage) return null;
+  if (statsRequest) return statsRequest;
+
+  statsRequest = (async () => {
+    try {
+      const data = await fetchJson("/api/dashboard/stats");
+      dashboardData = { ...(dashboardData || {}), ...data };
+      renderDashboardStats(data.general, data.queue, data.sync, data.storage);
+      renderActivityChart(data.activity_chart || []);
+      renderProviderQuality(data.provider_quality || []);
+      return data;
+    } catch (e) {
+      renderStatsError();
+      return null;
+    } finally {
+      statsRequest = null;
+    }
+  })();
+
+  return statsRequest;
+}
+
+async function loadFavoritesSurface() {
+  if (!hasFavoritesSurface) return null;
+  if (favoritesRequest) return favoritesRequest;
+
+  favoritesRequest = (async () => {
+    try {
+      const data = await fetchJson("/api/favorites");
+      renderFavorites(data.items || []);
+      syncFavoriteMap(data.items || []);
+      dashboardData = { ...(dashboardData || {}), favorites: data.items || [] };
+      return data.items || [];
+    } catch (e) {
+      favoritesList.innerHTML =
+        '<div class="stats-empty">Favorites could not be loaded.</div>';
+      return null;
+    } finally {
+      favoritesRequest = null;
+    }
+  })();
+
+  return favoritesRequest;
+}
+
+async function loadTimelinePage() {
+  if (!isTimelinePage) return null;
+  if (timelineRequest) return timelineRequest;
+
+  timelineRequest = (async () => {
+    try {
+      const data = await fetchJson("/api/history?limit=20");
+      const items = data.items || [];
+      renderActivity(items);
+      dashboardData = { ...(dashboardData || {}), history: items };
+      return items;
+    } catch (e) {
+      if (activityList) {
+        activityList.innerHTML =
+          '<div class="stats-empty">Timeline data could not be loaded.</div>';
+      }
+      return null;
+    } finally {
+      timelineRequest = null;
+    }
+  })();
+
+  return timelineRequest;
+}
+
+async function loadRadarPage() {
+  if (!isRadarPage) return null;
+  if (radarRequest) return radarRequest;
+
+  radarRequest = (async () => {
+    try {
+      const data = await fetchJson("/api/new-episodes");
+      const releases = data.results || [];
+      renderReleases(releases);
+      dashboardData = { ...(dashboardData || {}), releases };
+      return releases;
+    } catch (e) {
+      if (releaseList) {
+        releaseList.innerHTML =
+          '<div class="stats-empty">Radar data could not be loaded.</div>';
+      }
+      return null;
+    } finally {
+      radarRequest = null;
+    }
+  })();
+
+  return radarRequest;
+}
+
+async function loadDashboardStats() {
+  const tasks = [];
+  if (isStatsPage) tasks.push(loadStatsPage());
+  if (hasFavoritesSurface) tasks.push(loadFavoritesSurface());
+  if (isTimelinePage) tasks.push(loadTimelinePage());
+  if (isRadarPage) tasks.push(loadRadarPage());
+  return Promise.all(tasks);
 }
 
 function hideSearchSuggestions() {
@@ -987,36 +1078,43 @@ if (isHomePage) {
   autoOpenSeriesFromQuery();
   loadSearchSuggestions("");
 }
-if (isStandaloneFavoritesPage) {
-  loadFavoritesPage();
-  if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
-    window.LiveUpdates.subscribe(["favorites", "library", "nav"], () => {
-      loadFavoritesPage();
+
+if (hasFavoritesSurface || isStatsPage || isTimelinePage || isRadarPage) {
+  loadDashboardStats();
+}
+
+if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
+  if (hasFavoritesSurface) {
+    window.LiveUpdates.subscribe(["favorites"], () => {
+      loadFavoritesSurface();
     });
   }
-  dashboardFallbackTimer = setInterval(() => {
-    if (!window.LiveUpdates || !window.LiveUpdates.isConnected()) {
-      loadFavoritesPage();
-    }
-  }, 90000);
-} else if (hasDashboardSurface) {
-  loadDashboardStats();
-  const refreshDashboardFromLive = debounce(() => {
-    loadDashboardStats();
-  }, 220);
 
-  if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
+  if (isStatsPage) {
+    const refreshStatsFromLive = debounce(() => {
+      loadStatsPage();
+    }, 250);
     window.LiveUpdates.subscribe(
-      ["dashboard", "favorites", "autosync", "queue", "library", "nav"],
-      refreshDashboardFromLive,
+      ["dashboard", "queue", "autosync", "library", "settings"],
+      refreshStatsFromLive,
     );
   }
 
+  if (isTimelinePage) {
+    const refreshTimelineFromLive = debounce(() => {
+      loadTimelinePage();
+    }, 250);
+    window.LiveUpdates.subscribe(["queue", "dashboard"], refreshTimelineFromLive);
+  }
+}
+
+if (hasFavoritesSurface || isStatsPage || isTimelinePage || isRadarPage) {
+  const fallbackMs = isRadarPage ? 180000 : 90000;
   dashboardFallbackTimer = setInterval(() => {
     if (!window.LiveUpdates || !window.LiveUpdates.isConnected()) {
       loadDashboardStats();
     }
-  }, 90000);
+  }, fallbackMs);
 }
 
 async function doSearch() {

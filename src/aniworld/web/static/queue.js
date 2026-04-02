@@ -4,6 +4,14 @@ let badgePollTimer = null;
 let queueCustomPaths = [];
 let queueErrorsOnly = false;
 let queueAverageSecondsPerEpisode = null;
+let queueRequest = null;
+let queuePollIntervalMs = 0;
+let queueStatsFetchedAt = 0;
+let queueHasRunningWork = false;
+
+const ACTIVE_QUEUE_POLL_MS = 1800;
+const IDLE_QUEUE_POLL_MS = 6000;
+const QUEUE_STATS_REFRESH_MS = 45000;
 
 (async function loadQueueCustomPaths() {
   try {
@@ -18,9 +26,9 @@ let queueAverageSecondsPerEpisode = null;
 function openQueueModal() {
   queueModalOpen = true;
   document.getElementById("queueOverlay").style.display = "block";
-  loadQueue({ includeStats: true });
-  if (queuePollTimer) clearInterval(queuePollTimer);
-  queuePollTimer = setInterval(() => loadQueue({ includeStats: true }), 4000);
+  queueHasRunningWork = true;
+  refreshQueuePolling();
+  loadQueue({ includeStats: true, forceStats: true });
 }
 
 function closeQueueModal() {
@@ -30,6 +38,22 @@ function closeQueueModal() {
     clearInterval(queuePollTimer);
     queuePollTimer = null;
   }
+  queuePollIntervalMs = 0;
+}
+
+function refreshQueuePolling() {
+  if (!queueModalOpen) return;
+  const nextInterval = queueHasRunningWork
+    ? ACTIVE_QUEUE_POLL_MS
+    : IDLE_QUEUE_POLL_MS;
+
+  if (queuePollTimer && queuePollIntervalMs === nextInterval) return;
+  if (queuePollTimer) clearInterval(queuePollTimer);
+
+  queuePollIntervalMs = nextInterval;
+  queuePollTimer = setInterval(() => {
+    loadQueue({ includeStats: true });
+  }, nextInterval);
 }
 
 let lastFfmpegProgress = {};
@@ -52,21 +76,40 @@ function formatBandwidth(bwStr) {
 
 async function loadQueue(options = {}) {
   const includeStats = options.includeStats ?? queueModalOpen;
-  try {
-    const queueResp = await fetch("/api/queue");
-    const data = await queueResp.json();
-    const items = data.items || [];
-    lastFfmpegProgress = data.ffmpeg_progress || {};
-    if (includeStats) {
-      const statsResp = await fetch("/api/stats/general");
-      const stats = await statsResp.json();
-      queueAverageSecondsPerEpisode = stats.average_seconds_per_episode || null;
+  const shouldFetchStats =
+    includeStats &&
+    (options.forceStats ||
+      queueAverageSecondsPerEpisode == null ||
+      Date.now() - queueStatsFetchedAt >= QUEUE_STATS_REFRESH_MS);
+  if (queueRequest) return queueRequest;
+
+  queueRequest = (async () => {
+    try {
+      const queueResp = await fetch("/api/queue");
+      const data = await queueResp.json();
+      const items = data.items || [];
+      lastFfmpegProgress = data.ffmpeg_progress || {};
+      queueHasRunningWork = items.some(
+        (item) => item.status === "running" || !!item.current_url,
+      );
+      if (queueModalOpen) refreshQueuePolling();
+      if (shouldFetchStats) {
+        const statsResp = await fetch("/api/stats/general");
+        const stats = await statsResp.json();
+        queueAverageSecondsPerEpisode =
+          stats.average_seconds_per_episode || null;
+        queueStatsFetchedAt = Date.now();
+      }
+      renderQueue(items);
+      updateBadge(items);
+    } catch (e) {
+      /* ignore */
+    } finally {
+      queueRequest = null;
     }
-    renderQueue(items);
-    updateBadge(items);
-  } catch (e) {
-    /* ignore */
-  }
+  })();
+
+  return queueRequest;
 }
 
 function formatEta(seconds) {
@@ -567,15 +610,14 @@ function closeCaptchaModal() {
 
 // Live queue refresh with slow fallback polling
 (function startBadgePoll() {
-  loadQueue({ includeStats: false });
   if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
-    window.LiveUpdates.subscribe(["queue", "nav", "dashboard"], function () {
+    window.LiveUpdates.subscribe(["queue"], function () {
       loadQueue({ includeStats: queueModalOpen });
     });
   }
   badgePollTimer = setInterval(function () {
-    if (!queueModalOpen && (!window.LiveUpdates || !window.LiveUpdates.isConnected())) {
-      loadQueue({ includeStats: false });
+    if (queueModalOpen && (!window.LiveUpdates || !window.LiveUpdates.isConnected())) {
+      loadQueue({ includeStats: true });
     }
   }, 60000);
 })();

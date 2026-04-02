@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import re
@@ -466,12 +467,53 @@ _ui_event_seq = 0
 _ui_event_lock = threading.Lock()
 _ui_event_condition = threading.Condition(_ui_event_lock)
 _ui_event_last_emit = {}
+_runtime_cache = {}
+_runtime_cache_lock = threading.Lock()
+
+
+def _cache_get(key, ttl_seconds):
+    now = time.monotonic()
+    with _runtime_cache_lock:
+        entry = _runtime_cache.get(key)
+        if not entry:
+            return None
+        if now - entry["stored_at"] >= ttl_seconds:
+            _runtime_cache.pop(key, None)
+            return None
+        return copy.deepcopy(entry["value"])
+
+
+def _cache_set(key, value):
+    cached_value = copy.deepcopy(value)
+    with _runtime_cache_lock:
+        _runtime_cache[key] = {
+            "stored_at": time.monotonic(),
+            "value": cached_value,
+        }
+    return copy.deepcopy(cached_value)
+
+
+def _cache_invalidate(*prefixes):
+    if not prefixes:
+        return
+    with _runtime_cache_lock:
+        for key in list(_runtime_cache.keys()):
+            if any(key.startswith(prefix) for prefix in prefixes):
+                _runtime_cache.pop(key, None)
 
 
 def _emit_ui_event(*channels, min_interval=0.75):
     normalized = tuple(sorted({ch for ch in channels if ch}))
     if not normalized:
         return
+
+    if any(
+        channel in normalized
+        for channel in ("queue", "autosync", "dashboard", "library", "settings", "favorites")
+    ):
+        _cache_invalidate("stats:", "dashboard:")
+    if any(channel in normalized for channel in ("library", "settings", "favorites")):
+        _cache_invalidate("library:")
 
     now = time.monotonic()
     with _ui_event_condition:
@@ -646,6 +688,35 @@ def _build_nav_state():
         "favorites": len(list_favorites()),
         "autosync_enabled": int(sync.get("enabled", 0)),
     }
+
+
+def _get_cached_library_snapshot(include_meta=True):
+    cache_key = f"library:{1 if include_meta else 0}"
+    cached = _cache_get(cache_key, 8.0)
+    if cached is not None:
+        return cached
+    snapshot = _scan_library_snapshot(include_meta=include_meta)
+    return _cache_set(cache_key, snapshot)
+
+
+def _get_cached_stats_payload():
+    cached = _cache_get("stats:summary", 4.0)
+    if cached is not None:
+        return cached
+
+    general = get_general_stats()
+    queue = get_queue_stats()
+    sync = get_sync_stats()
+    storage_snapshot = _get_cached_library_snapshot(include_meta=True)
+    payload = {
+        "general": general,
+        "queue": queue,
+        "sync": sync,
+        "storage": storage_snapshot["summary"],
+        "provider_quality": get_provider_quality(),
+        "activity_chart": get_activity_chart(7),
+    }
+    return _cache_set("stats:summary", payload)
 
 
 def _queue_worker():
@@ -1163,14 +1234,6 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     @app.route("/radar")
     def radar_page():
         return render_template("radar.html")
-
-    @app.route("/service-worker.js")
-    def service_worker():
-        response = app.send_static_file("sw.js")
-        response.headers["Cache-Control"] = "no-cache"
-        response.headers["Service-Worker-Allowed"] = "/"
-        response.headers["Content-Type"] = "application/javascript; charset=utf-8"
-        return response
 
     @app.route("/api/search", methods=["POST"])
     def api_search():
@@ -1990,12 +2053,17 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     def api_stats_general():
         return jsonify(get_general_stats())
 
+    @app.route("/api/dashboard/stats")
+    def api_dashboard_stats():
+        return jsonify(_get_cached_stats_payload())
+
     @app.route("/api/dashboard")
     def api_dashboard():
-        general = get_general_stats()
-        queue = get_queue_stats()
-        sync = get_sync_stats()
-        storage_snapshot = _scan_library_snapshot(include_meta=True)
+        cached = _cache_get("dashboard:full", 4.0)
+        if cached is not None:
+            return jsonify(cached)
+
+        stats_payload = _get_cached_stats_payload()
         favorites = list_favorites()
         meta_by_url = {item["series_url"]: item for item in list_series_meta()}
         for favorite in favorites:
@@ -2003,20 +2071,14 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             if not favorite.get("poster_url"):
                 favorite["poster_url"] = meta.get("poster_url")
         releases = _cached_browse("new_episodes", fetch_new_episodes) or []
-        return jsonify(
-            {
-                "general": general,
-                "queue": queue,
-                "sync": sync,
-                "storage": storage_snapshot["summary"],
-                "favorites": favorites[:8],
-                "recent_activity": get_recent_activity(8),
-                "history": get_download_history(14),
-                "provider_quality": get_provider_quality(),
-                "activity_chart": get_activity_chart(7),
-                "releases": releases[:10],
-            }
-        )
+        payload = {
+            **stats_payload,
+            "favorites": favorites[:8],
+            "recent_activity": get_recent_activity(8),
+            "history": get_download_history(14),
+            "releases": releases[:10],
+        }
+        return jsonify(_cache_set("dashboard:full", payload))
 
     @app.route("/api/nav")
     def api_nav():
@@ -2062,7 +2124,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
     @app.route("/api/library")
     def api_library():
-        return jsonify(_scan_library_snapshot(include_meta=True))
+        return jsonify(_get_cached_library_snapshot(include_meta=True))
 
     @app.route("/api/library/delete", methods=["POST"])
     def api_library_delete():
@@ -2251,4 +2313,10 @@ def start_web_ui(
     else:
         from waitress import serve
 
-        serve(app, host=host, port=port)
+        try:
+            waitress_threads = int(os.environ.get("ANIWORLD_WEB_THREADS", "12"))
+        except ValueError:
+            waitress_threads = 12
+        waitress_threads = max(4, min(waitress_threads, 64))
+
+        serve(app, host=host, port=port, threads=waitress_threads)

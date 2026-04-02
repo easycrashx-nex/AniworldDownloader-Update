@@ -240,12 +240,61 @@ CREATE TABLE IF NOT EXISTS download_queue (
 );
 """
 
+_CREATE_DOWNLOAD_ARCHIVE_TABLE = """\
+CREATE TABLE IF NOT EXISTS download_archive (
+    queue_id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    series_url TEXT NOT NULL,
+    total_episodes INTEGER NOT NULL,
+    language TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    username TEXT,
+    status TEXT NOT NULL
+        CHECK(status IN ('completed','failed','cancelled')),
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    custom_path_id INTEGER,
+    errors TEXT NOT NULL DEFAULT '[]'
+);
+"""
+
+_CREATE_DOWNLOAD_ARCHIVE_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_download_archive_completed_at "
+    "ON download_archive (completed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_download_archive_status "
+    "ON download_archive (status)",
+    "CREATE INDEX IF NOT EXISTS idx_download_archive_provider "
+    "ON download_archive (provider)",
+)
+
+
+def _archive_terminal_downloads(conn, queue_id=None):
+    query = (
+        "INSERT OR REPLACE INTO download_archive ("
+        "queue_id, title, series_url, total_episodes, language, provider, username, "
+        "status, source, created_at, completed_at, custom_path_id, errors"
+        ") "
+        "SELECT id, title, series_url, total_episodes, language, provider, username, "
+        "status, COALESCE(source, 'manual'), created_at, "
+        "COALESCE(completed_at, datetime('now')), custom_path_id, COALESCE(errors, '[]') "
+        "FROM download_queue WHERE status IN ('completed', 'failed', 'cancelled')"
+    )
+    params = ()
+    if queue_id is not None:
+        query += " AND id = ?"
+        params = (queue_id,)
+    conn.execute(query, params)
+
 
 def init_queue_db():
     ANIWORLD_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     conn = get_db()
     try:
         conn.execute(_CREATE_QUEUE_TABLE)
+        conn.execute(_CREATE_DOWNLOAD_ARCHIVE_TABLE)
+        for stmt in _CREATE_DOWNLOAD_ARCHIVE_INDEXES:
+            conn.execute(stmt)
         # Add position column for queue reordering (migration for existing DBs)
         try:
             conn.execute(
@@ -272,6 +321,7 @@ def init_queue_db():
             conn.execute("ALTER TABLE download_queue ADD COLUMN captcha_url TEXT")
         except Exception:
             pass  # column already exists
+        _archive_terminal_downloads(conn)
         conn.commit()
     finally:
         conn.close()
@@ -428,7 +478,7 @@ def update_queue_progress(queue_id, current_episode, current_url):
 def set_queue_status(queue_id, status):
     conn = get_db()
     try:
-        if status in ("completed", "failed"):
+        if status in ("completed", "failed", "cancelled"):
             conn.execute(
                 "UPDATE download_queue SET status = ?, completed_at = datetime('now') WHERE id = ?",
                 (status, queue_id),
@@ -438,6 +488,8 @@ def set_queue_status(queue_id, status):
                 "UPDATE download_queue SET status = ? WHERE id = ?",
                 (status, queue_id),
             )
+        if status in ("completed", "failed", "cancelled"):
+            _archive_terminal_downloads(conn, queue_id)
         conn.commit()
     finally:
         conn.close()
@@ -492,9 +544,10 @@ def cancel_queue_item(queue_id):
         if row["status"] != "running":
             return False, "Can only cancel running items"
         conn.execute(
-            "UPDATE download_queue SET status = 'cancelled' WHERE id = ?",
+            "UPDATE download_queue SET status = 'cancelled', completed_at = datetime('now') WHERE id = ?",
             (queue_id,),
         )
+        _archive_terminal_downloads(conn, queue_id)
         conn.commit()
         return True, None
     finally:
@@ -533,19 +586,7 @@ def delete_completed_queue_item(queue_id):
     """Delete a queue item only if its status is 'completed'. Used by auto-sync cleanup."""
     conn = get_db()
     try:
-        conn.execute(
-            "DELETE FROM download_queue WHERE id = ? AND status = 'completed'",
-            (queue_id,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def delete_completed_queue_item(queue_id):
-    """Delete a queue item only if its status is 'completed'. Used by auto-sync cleanup."""
-    conn = get_db()
-    try:
+        _archive_terminal_downloads(conn, queue_id)
         conn.execute(
             "DELETE FROM download_queue WHERE id = ? AND status = 'completed'",
             (queue_id,),
@@ -558,6 +599,7 @@ def delete_completed_queue_item(queue_id):
 def clear_completed():
     conn = get_db()
     try:
+        _archive_terminal_downloads(conn)
         conn.execute(
             "DELETE FROM download_queue WHERE status IN ('completed', 'failed', 'cancelled')"
         )
@@ -998,9 +1040,16 @@ def get_recent_series_references(limit=500):
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT title, series_url, MAX(created_at) AS last_seen "
-            "FROM download_queue "
-            "WHERE series_url IS NOT NULL AND TRIM(series_url) != '' "
+            "SELECT title, series_url, MAX(last_seen) AS last_seen "
+            "FROM ("
+            "  SELECT title, series_url, created_at AS last_seen "
+            "  FROM download_queue "
+            "  WHERE series_url IS NOT NULL AND TRIM(series_url) != '' "
+            "  UNION ALL "
+            "  SELECT title, series_url, COALESCE(completed_at, created_at) AS last_seen "
+            "  FROM download_archive "
+            "  WHERE series_url IS NOT NULL AND TRIM(series_url) != ''"
+            ") refs "
             "GROUP BY title, series_url "
             "ORDER BY last_seen DESC LIMIT ?",
             (limit,),
@@ -1154,21 +1203,21 @@ def get_general_stats():
     conn = get_db()
     try:
         total_downloads = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_queue "
+            "SELECT COUNT(*) AS cnt FROM download_archive "
             "WHERE status IN ('completed', 'failed')"
         ).fetchone()["cnt"]
         completed = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_queue WHERE status = 'completed'"
+            "SELECT COUNT(*) AS cnt FROM download_archive WHERE status = 'completed'"
         ).fetchone()["cnt"]
         failed = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_queue WHERE status = 'failed'"
+            "SELECT COUNT(*) AS cnt FROM download_archive WHERE status = 'failed'"
         ).fetchone()["cnt"]
         total_episodes = conn.execute(
-            "SELECT COALESCE(SUM(total_episodes), 0) AS s FROM download_queue "
+            "SELECT COALESCE(SUM(total_episodes), 0) AS s FROM download_archive "
             "WHERE status = 'completed'"
         ).fetchone()["s"]
         last_24h = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_queue "
+            "SELECT COUNT(*) AS cnt FROM download_archive "
             "WHERE status = 'completed' "
             "AND completed_at >= datetime('now', '-1 day')"
         ).fetchone()["cnt"]
@@ -1176,16 +1225,16 @@ def get_general_stats():
         avg_dur = conn.execute(
             "SELECT AVG("
             "  (julianday(completed_at) - julianday(created_at)) * 86400"
-            ") AS avg_s FROM download_queue "
+            ") AS avg_s FROM download_archive "
             "WHERE status = 'completed' AND completed_at IS NOT NULL"
         ).fetchone()["avg_s"]
         avg_eps = conn.execute(
-            "SELECT AVG(total_episodes) AS avg_eps FROM download_queue "
+            "SELECT AVG(total_episodes) AS avg_eps FROM download_archive "
             "WHERE status = 'completed'"
         ).fetchone()["avg_eps"]
         # Most downloaded titles
         top_titles = conn.execute(
-            "SELECT title, COUNT(*) AS cnt FROM download_queue "
+            "SELECT title, COUNT(*) AS cnt FROM download_archive "
             "WHERE status = 'completed' GROUP BY title "
             "ORDER BY cnt DESC LIMIT 10"
         ).fetchall()
@@ -1193,16 +1242,16 @@ def get_general_stats():
         by_language = conn.execute(
             "SELECT language, COUNT(*) AS cnt, "
             "COALESCE(SUM(total_episodes), 0) AS eps "
-            "FROM download_queue WHERE status = 'completed' "
+            "FROM download_archive WHERE status = 'completed' "
             "GROUP BY language ORDER BY cnt DESC"
         ).fetchall()
         # Anime vs Series (heuristic: aniworld.to = anime, s.to = series)
         anime_count = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_queue "
+            "SELECT COUNT(*) AS cnt FROM download_archive "
             "WHERE status = 'completed' AND series_url LIKE '%aniworld.to%'"
         ).fetchone()["cnt"]
         series_count = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_queue "
+            "SELECT COUNT(*) AS cnt FROM download_archive "
             "WHERE status = 'completed' AND series_url LIKE '%s.to%'"
         ).fetchone()["cnt"]
         return {
@@ -1270,7 +1319,7 @@ def get_provider_quality():
             "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, "
             "SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled, "
             "COALESCE(SUM(CASE WHEN status = 'completed' THEN total_episodes ELSE 0 END), 0) AS episodes "
-            "FROM download_queue "
+            "FROM download_archive "
             "GROUP BY provider ORDER BY completed DESC, failed ASC, provider ASC"
         ).fetchall()
         return [dict(r) for r in rows]
@@ -1288,7 +1337,7 @@ def get_activity_chart(days=7):
         )
         rows = conn.execute(
             "SELECT substr(completed_at, 1, 10) AS day, COUNT(*) AS completed "
-            "FROM download_queue "
+            "FROM download_archive "
             "WHERE status = 'completed' AND completed_at >= ? "
             "GROUP BY substr(completed_at, 1, 10)",
             (since,),

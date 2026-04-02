@@ -17,16 +17,24 @@ const SCHEDULE_INTERVALS = {
 let currentSyncSchedule = "0";
 let customPathsCache = [];
 let langSepEnabled = false;
+let autosyncJobsRequest = null;
+let autosyncScheduleRequest = null;
 
 async function loadSyncSchedule() {
-  try {
-    const resp = await fetch("/api/settings");
-    const data = await resp.json();
-    currentSyncSchedule = data.sync_schedule || "0";
-    langSepEnabled = data.lang_separation === "1";
-  } catch (e) {
-    /* ignore */
-  }
+  if (autosyncScheduleRequest) return autosyncScheduleRequest;
+  autosyncScheduleRequest = (async () => {
+    try {
+      const resp = await fetch("/api/settings");
+      const data = await resp.json();
+      currentSyncSchedule = data.sync_schedule || "0";
+      langSepEnabled = data.lang_separation === "1";
+    } catch (e) {
+      /* ignore */
+    } finally {
+      autosyncScheduleRequest = null;
+    }
+  })();
+  return autosyncScheduleRequest;
 }
 
 async function loadCustomPathsForEdit() {
@@ -40,14 +48,20 @@ async function loadCustomPathsForEdit() {
 }
 
 async function loadAutosyncJobs() {
-  try {
-    const res = await fetch("/api/autosync");
-    const data = await res.json();
-    renderJobs(data.jobs || []);
-  } catch (e) {
-    autosyncList.innerHTML =
-      '<div class="queue-empty">Failed to load sync jobs.</div>';
-  }
+  if (autosyncJobsRequest) return autosyncJobsRequest;
+  autosyncJobsRequest = (async () => {
+    try {
+      const res = await fetch("/api/autosync");
+      const data = await res.json();
+      renderJobs(data.jobs || []);
+    } catch (e) {
+      autosyncList.innerHTML =
+        '<div class="queue-empty">Failed to load sync jobs.</div>';
+    } finally {
+      autosyncJobsRequest = null;
+    }
+  })();
+  return autosyncJobsRequest;
 }
 
 function computeNextCheck(lastCheck) {
@@ -337,7 +351,7 @@ function esc(value) {
 Promise.all([loadSyncSchedule(), loadCustomPathsForEdit()]).then(loadAutosyncJobs);
 
 if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
-  window.LiveUpdates.subscribe(["autosync", "settings", "queue"], function () {
+  window.LiveUpdates.subscribe(["autosync", "settings"], function () {
     loadSyncSchedule();
     loadAutosyncJobs();
   });
