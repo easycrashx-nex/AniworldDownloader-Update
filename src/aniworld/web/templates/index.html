@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Home - AniWorld Downloader{% endblock %}
+{% block title %}Home - AniWorld{% endblock %}
 {% block content %}
 <div class="container home-shell">
   <section class="hero-panel">
     <div class="hero-copy">
       <span class="eyebrow">Stream Browser</span>
-      <h1 id="pageHeading">AniWorld Downloader</h1>
+      <h1 id="pageHeading">AniWorld</h1>
       <p class="hero-subtitle" id="pageSubheading">
         {% if experimental_flags.filmpalast %}
         Search AniWorld titles, inspect seasons, and queue downloads. FilmPalast
@@ -71,6 +71,56 @@
         Random
       </button>
     </div>
+    <div class="search-filters">
+      <div class="search-filter-field search-filter-genre">
+        <span class="search-filter-label">Genre</span>
+        <input
+          type="text"
+          id="searchGenreInput"
+          list="searchGenreOptions"
+          placeholder="Action, Fantasy ..."
+        />
+        <datalist id="searchGenreOptions"></datalist>
+      </div>
+      <div class="search-filter-field search-filter-year">
+        <span class="search-filter-label">Year From</span>
+        <input type="number" id="searchYearFrom" min="1950" max="2099" placeholder="2018" />
+      </div>
+      <div class="search-filter-field search-filter-year">
+        <span class="search-filter-label">Year To</span>
+        <input type="number" id="searchYearTo" min="1950" max="2099" placeholder="2026" />
+      </div>
+      <div class="search-filter-field search-filter-sort">
+        <span class="search-filter-label">Sort By</span>
+        <select id="searchSortBy">
+          <option value="source">Best Match</option>
+          <option value="year-desc">Newest Year</option>
+          <option value="year-asc">Oldest Year</option>
+          <option value="title-asc">Title A-Z</option>
+          <option value="title-desc">Title Z-A</option>
+        </select>
+      </div>
+      <label class="search-filter-toggle">
+        <input type="checkbox" id="searchFavoritesOnly" />
+        Favorites Only
+      </label>
+      <label class="search-filter-toggle">
+        <input type="checkbox" id="searchDownloadedOnly" />
+        Downloaded Only
+      </label>
+      <button
+        class="btn-secondary btn-small search-filter-reset"
+        id="resetSearchFiltersBtn"
+        type="button"
+      >
+        Reset Filters
+      </button>
+    </div>
+    <div class="search-preset-genres">
+      <span class="search-filter-label">Quick Genres</span>
+      <div class="search-preset-genre-list" id="searchGenrePresetChips"></div>
+    </div>
+    <div class="search-filter-summary" id="searchFilterSummary"></div>
     <div class="search-helper-row">
       <div class="search-hints" id="searchHints"></div>
       <div class="search-suggestions" id="searchSuggestions"></div>
@@ -112,89 +162,164 @@
 </div>
 
 <div class="overlay" id="overlay" onclick="closeModalOutside(event)">
-  <div class="modal" id="modal">
+  <div class="modal modal-series" id="modal">
     <button class="close" onclick="closeModal()">&times;</button>
-    <div class="modal-header">
-      <img id="modalPoster" src="" alt="" />
-      <div class="modal-meta">
-        <h2 id="modalTitle"></h2>
-        <div class="genres" id="modalGenres"></div>
-        <div class="year" id="modalYear"></div>
-        <div class="desc" id="modalDesc"></div>
-        <button
-          class="btn-secondary btn-small modal-favorite-btn"
-          id="favoriteToggleBtn"
-          onclick="toggleFavorite()"
-        >
-          Add To Favorites
-        </button>
+    <div class="modal-hero">
+      <div class="modal-poster-column">
+        <div class="modal-poster-shell">
+          <img id="modalPoster" src="" alt="" />
+        </div>
+      </div>
+      <div class="modal-meta modal-overview">
+        <span class="modal-source-badge" id="modalSiteBadge">AniWorld</span>
+        <div class="modal-title-row">
+          <h2 id="modalTitle"></h2>
+          <div class="year" id="modalYear"></div>
+        </div>
+        <div class="modal-quick-stats" id="modalQuickStats"></div>
       </div>
     </div>
-    <div class="controls">
-      <select id="languageSelect">
-        {% for key, label in lang_labels.items() %}
-        <option value="{{ label }}">{{ label }}</option>
-        {% endfor %}
-      </select>
-      <select id="providerSelect">
-        {% for p in supported_providers %}
-        <option value="{{ p }}">{{ p }}</option>
-        {% endfor %}
-      </select>
-      <select id="customPathSelect" style="display: none">
-        <option value="">Default</option>
-      </select>
+    <div class="modal-favorite-row">
+      <button
+        class="btn-secondary btn-small modal-favorite-btn"
+        id="favoriteToggleBtn"
+        onclick="toggleFavorite()"
+      >
+        Add To Favorites
+      </button>
     </div>
-    <div class="provider-availability" id="providerAvailability"></div>
+    <div class="modal-secondary-grid">
+      <section class="modal-panel-card modal-details-panel">
+        <span class="modal-panel-kicker">Series Details</span>
+        <div class="modal-details-grid">
+          <div class="genres modal-genre-list" id="modalGenres"></div>
+          <div class="modal-info-list">
+            <div class="modal-info-item">
+              <span class="modal-field-label">Source</span>
+              <span id="modalDetailsSource">AniWorld</span>
+            </div>
+            <div class="modal-info-item">
+              <span class="modal-field-label">Release</span>
+              <span id="modalDetailsYear"></span>
+            </div>
+          </div>
+          <div class="modal-desc-wrap">
+            <div class="desc is-collapsed" id="modalDesc"></div>
+            <button
+              class="btn-secondary btn-small modal-desc-toggle"
+              id="modalDescToggle"
+              type="button"
+              hidden
+            >
+              Show More
+            </button>
+          </div>
+        </div>
+      </section>
+      <section class="modal-download-panel">
+        <div class="modal-download-grid">
+          <div class="modal-panel-card">
+            <span class="modal-panel-kicker">Download Setup</span>
+            <div class="controls modal-controls-grid">
+              <div class="modal-control-field">
+                <span class="modal-field-label">Language</span>
+                <select id="languageSelect">
+                  {% for key, label in lang_labels.items() %}
+                  <option value="{{ label }}">{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="modal-control-field">
+                <span class="modal-field-label">Provider</span>
+                <select id="providerSelect">
+                  {% for p in supported_providers %}
+                  <option value="{{ p }}">{{ p }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="modal-control-field">
+                <span class="modal-field-label">Download Path</span>
+                <select id="customPathSelect" style="display: none">
+                  <option value="">Default</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="modal-panel-card modal-download-side">
+            <div class="modal-download-toggle">
+              <span class="modal-panel-kicker">Automation</span>
+              <label class="select-all-label"
+                ><input
+                  type="checkbox"
+                  id="autoSyncCheck"
+                  onchange="toggleAutoSync()"
+                />
+                Keep Updated (Auto-Sync)</label
+              >
+            </div>
+            <div
+              class="provider-availability"
+              id="providerAvailability"
+            ></div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <section class="modal-content-panel">
+        <div class="episodes-header modal-content-header">
+          <div>
+            <span class="modal-panel-kicker">Season Browser</span>
+            <h3>Episodes</h3>
+          </div>
+          <div class="modal-content-actions">
+            <label class="select-all-label"
+              ><input
+                type="checkbox"
+                id="selectAll"
+                onchange="toggleSelectAll()"
+              />
+              Select All</label
+            >
+          </div>
+        </div>
+        <div class="spinner" id="episodeSpinner">Loading episodes...</div>
+        <div class="season-accordion" id="seasonAccordion"></div>
+    </section>
     <script>
       window.ANIWORLD_LANGS = {{ lang_labels | tojson }};
       window.STO_LANGS = {{ sto_lang_labels | tojson }};
     </script>
-    <div class="episodes-header">
-      <h3>Episodes</h3>
-      <div style="display: flex; align-items: center; gap: 16px">
-        <label class="select-all-label"
-          ><input
-            type="checkbox"
-            id="autoSyncCheck"
-            onchange="toggleAutoSync()"
-          />
-          Keep Updated (Auto-Sync)</label
-        >
-        <label class="select-all-label"
-          ><input type="checkbox" id="selectAll" onchange="toggleSelectAll()" />
-          Select All</label
-        >
+    <div class="modal-footer-shell">
+      <div class="status-bar" id="statusBar">
+        <span id="statusText"></span>
       </div>
-    </div>
-    <div class="season-accordion" id="seasonAccordion"></div>
-    <div class="spinner" id="episodeSpinner">Loading episodes...</div>
-    <div class="status-bar" id="statusBar">
-      <span id="statusText"></span>
-    </div>
-    <div class="modal-actions">
-      <button
-        class="btn-download-selected"
-        id="downloadSelectedBtn"
-        onclick="startDownload(false)"
-      >
-        Download Selected
-      </button>
-      <button
-        class="btn-download-all"
-        id="downloadAllBtn"
-        onclick="startDownload(true)"
-      >
-        Download All
-      </button>
-      <button
-        class="btn-download-all-langs"
-        id="downloadAllLangsBtn"
-        onclick="startDownloadAllLangs()"
-        style="display: none"
-      >
-        Download All Languages
-      </button>
+      <div class="modal-actions modal-actions-cta">
+        <div class="modal-selection-summary" id="modalSelectionSummary"></div>
+        <div class="modal-action-buttons">
+          <button
+            class="btn-download-selected"
+            id="downloadSelectedBtn"
+            onclick="startDownload(false)"
+          >
+            Download Selected
+          </button>
+          <button
+            class="btn-download-all"
+            id="downloadAllBtn"
+            onclick="startDownload(true)"
+          >
+            Download All
+          </button>
+          <button
+            class="btn-download-all-langs"
+            id="downloadAllLangsBtn"
+            onclick="startDownloadAllLangs()"
+            style="display: none"
+          >
+            Download All Languages
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </div>

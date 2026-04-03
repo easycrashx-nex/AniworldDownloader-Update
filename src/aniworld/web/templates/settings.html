@@ -65,9 +65,11 @@
   </div>
 
   <div class="settings-notice">
-    Changes made below are temporary and reset when AniWorld Downloader is
-    restarted. To persist them, set them in your <code>.env</code> file at
-    <code>{{ env_path }}</code>.
+    Server settings like download paths, provider defaults, and experimental
+    flags are temporary here and reset when AniWorld Downloader is restarted.
+    To persist those, set them in your <code>.env</code> file at
+    <code>{{ env_path }}</code>. Personal display preferences stay tied to your
+    account.
   </div>
 
   <div class="settings-section">
@@ -83,6 +85,23 @@
     <div class="settings-hint">
       Blendet FilmPalast im Home-Bereich wieder ein, solange die Quelle noch in
       Entwicklung ist.
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h2>Display</h2>
+    <div class="settings-row" style="gap: 10px; flex-wrap: wrap">
+      <div class="settings-field">
+        <label class="field-label">UI Mode</label>
+        <select id="uiMode" onchange="saveUiMode()" class="sync-select">
+          <option value="cozy">Cozy</option>
+          <option value="compact">Compact</option>
+        </select>
+      </div>
+    </div>
+    <div class="settings-hint">
+      Cozy gives the UI more breathing room. Compact makes lists, panels, and
+      controls tighter.
     </div>
   </div>
 

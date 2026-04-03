@@ -6,6 +6,28 @@
   const navMenus = Array.from(document.querySelectorAll(".nav-menu"));
   let navFallbackTimer = null;
   let navRequest = null;
+  let shellSettingsRequest = null;
+
+  function applyUiDensity(mode) {
+    const nextMode = mode === "compact" ? "compact" : "cozy";
+    document.body.setAttribute("data-ui-density", nextMode);
+  }
+
+  async function loadShellSettings() {
+    if (shellSettingsRequest) return shellSettingsRequest;
+    shellSettingsRequest = (async () => {
+      try {
+        const resp = await fetch("/api/settings");
+        const data = await resp.json();
+        applyUiDensity(data.ui_mode || document.body.dataset.uiDensity);
+      } catch (e) {
+        /* ignore */
+      } finally {
+        shellSettingsRequest = null;
+      }
+    })();
+    return shellSettingsRequest;
+  }
 
   function setBadge(node, value) {
     if (!node) return;
@@ -70,10 +92,13 @@
   });
 
   window.loadNavState = loadNavState;
+  window.applyUiDensity = applyUiDensity;
   loadNavState();
+  loadShellSettings();
 
   if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
     window.LiveUpdates.subscribe(["nav"], () => loadNavState());
+    window.LiveUpdates.subscribe(["settings"], () => loadShellSettings());
   }
 
   navFallbackTimer = setInterval(() => {

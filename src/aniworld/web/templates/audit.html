@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Audit Log - AniWorld Downloader{% endblock %}
+{% block content %}
+<div class="settings-container insight-shell">
+  <div class="page-header">
+    <span class="eyebrow">Settings</span>
+    <h1>Audit Log</h1>
+    <p class="page-description">
+      Review account actions, queue changes, favorites, and sync activity per
+      user.
+    </p>
+  </div>
+
+  <section class="dashboard-panel">
+    <div class="section-heading">
+      <div>
+        <span class="section-kicker">Activity</span>
+        <h2 class="browse-heading">User Audit</h2>
+      </div>
+    </div>
+    <div class="library-toolbar page-panel audit-toolbar">
+      {% if auth_enabled and current_user and current_user.role == 'admin' %}
+      <select id="auditUserFilter">
+        <option value="">All Users</option>
+      </select>
+      {% endif %}
+      <select id="auditActionFilter">
+        <option value="">All Actions</option>
+        <option value="auth.login">Logins</option>
+        <option value="queue.added">Queue Added</option>
+        <option value="queue.retried">Retries</option>
+        <option value="favorite.added">Favorites Added</option>
+        <option value="favorite.removed">Favorites Removed</option>
+        <option value="autosync.added">Auto-Sync Added</option>
+        <option value="settings.updated">Settings Updated</option>
+      </select>
+    </div>
+    <div class="audit-list" id="auditList">
+      <div class="stats-empty">Loading audit activity...</div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  window.auditIsAdmin = {{ 'true' if auth_enabled and current_user and current_user.role == 'admin' else 'false' }};
+</script>
+<script src="{{ url_for('static', filename='audit.js') }}"></script>
+{% endblock %}

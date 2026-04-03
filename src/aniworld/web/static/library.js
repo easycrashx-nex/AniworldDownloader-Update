@@ -6,6 +6,9 @@ let libraryRequest = null;
 const librarySearchInput = document.getElementById("librarySearchInput");
 const libraryLocationFilter = document.getElementById("libraryLocationFilter");
 const libraryLanguageFilter = document.getElementById("libraryLanguageFilter");
+const librarySortFilter = document.getElementById("librarySortFilter");
+const libraryIssueFilter = document.getElementById("libraryIssueFilter");
+const librarySummary = document.getElementById("librarySummary");
 
 function getExpandedState() {
   var state = { locations: {}, langFolders: {}, titles: {}, seasons: {} };
@@ -137,6 +140,7 @@ async function loadLibrary() {
       populateLibraryFilters();
       applyLibraryFilters();
     } catch (e) {
+      renderLibrarySummary([]);
       list.innerHTML = '<div class="library-empty">Failed to load library</div>';
     } finally {
       libraryRequest = null;
@@ -175,6 +179,8 @@ function populateLibraryFilters() {
   if (window.refreshCustomSelect) {
     if (libraryLocationFilter) window.refreshCustomSelect(libraryLocationFilter);
     if (libraryLanguageFilter) window.refreshCustomSelect(libraryLanguageFilter);
+    if (librarySortFilter) window.refreshCustomSelect(librarySortFilter);
+    if (libraryIssueFilter) window.refreshCustomSelect(libraryIssueFilter);
   }
 }
 
@@ -192,11 +198,134 @@ function matchesTitleQuery(title, query) {
   });
 }
 
+function buildTitleInsights(title) {
+  var missingCount = 0;
+  var duplicateCount = 0;
+  var seasonCount = 0;
+
+  Object.keys(title.seasons || {}).forEach(function (seasonKey) {
+    seasonCount += 1;
+    var episodes = title.seasons[seasonKey] || [];
+    var seen = {};
+    var numbers = [];
+    episodes.forEach(function (ep) {
+      var number = Number(ep.episode || 0);
+      if (!number) return;
+      seen[number] = (seen[number] || 0) + 1;
+      numbers.push(number);
+    });
+
+    Object.keys(seen).forEach(function (numberKey) {
+      if (seen[numberKey] > 1) {
+        duplicateCount += seen[numberKey] - 1;
+      }
+    });
+
+    if (!numbers.length) return;
+    numbers.sort(function (a, b) {
+      return a - b;
+    });
+    var uniqueNumbers = numbers.filter(function (value, index) {
+      return index === 0 || value !== numbers[index - 1];
+    });
+    for (var i = 1; i < uniqueNumbers.length; i += 1) {
+      var gap = uniqueNumbers[i] - uniqueNumbers[i - 1] - 1;
+      if (gap > 0) missingCount += gap;
+    }
+  });
+
+  return {
+    missingCount: missingCount,
+    duplicateCount: duplicateCount,
+    seasonCount: seasonCount,
+    issueLevel:
+      duplicateCount > 0 ? "duplicates" : missingCount > 0 ? "missing" : "healthy",
+  };
+}
+
+function matchesIssueFilter(title, issueValue) {
+  if (!issueValue) return true;
+  var insights = title.insights || buildTitleInsights(title);
+  if (issueValue === "missing") return insights.missingCount > 0;
+  if (issueValue === "duplicates") return insights.duplicateCount > 0;
+  if (issueValue === "healthy") {
+    return insights.missingCount === 0 && insights.duplicateCount === 0;
+  }
+  return true;
+}
+
+function sortTitles(titles, sortValue) {
+  var nextTitles = titles.slice();
+  nextTitles.sort(function (a, b) {
+    if (sortValue === "size-desc") {
+      return (b.total_size || 0) - (a.total_size || 0);
+    }
+    if (sortValue === "episodes-desc") {
+      return (b.total_episodes || 0) - (a.total_episodes || 0);
+    }
+    return String(a.folder || "").localeCompare(String(b.folder || ""), undefined, {
+      sensitivity: "base",
+    });
+  });
+  return nextTitles;
+}
+
+function renderLibrarySummary(locations) {
+  if (!librarySummary) return;
+  var titleCount = 0;
+  var episodeCount = 0;
+  var totalSize = 0;
+  var missingTitles = 0;
+  var duplicateTitles = 0;
+
+  locations.forEach(function (loc) {
+    var titleGroups;
+    if (libraryLangSep && loc.lang_folders) {
+      titleGroups = [];
+      loc.lang_folders.forEach(function (lf) {
+        titleGroups = titleGroups.concat(lf.titles || []);
+      });
+    } else {
+      titleGroups = loc.titles || [];
+    }
+
+    titleGroups.forEach(function (title) {
+      titleCount += 1;
+      episodeCount += Number(title.total_episodes || 0);
+      totalSize += Number(title.total_size || 0);
+      var insights = title.insights || buildTitleInsights(title);
+      if (insights.missingCount > 0) missingTitles += 1;
+      if (insights.duplicateCount > 0) duplicateTitles += 1;
+    });
+  });
+
+  librarySummary.innerHTML = `
+    <div class="library-summary-card">
+      <span class="library-summary-label">Titles</span>
+      <strong>${titleCount}</strong>
+    </div>
+    <div class="library-summary-card">
+      <span class="library-summary-label">Episodes</span>
+      <strong>${episodeCount}</strong>
+    </div>
+    <div class="library-summary-card">
+      <span class="library-summary-label">Storage</span>
+      <strong>${formatSize(totalSize)}</strong>
+    </div>
+    <div class="library-summary-card">
+      <span class="library-summary-label">Need Attention</span>
+      <strong>${missingTitles + duplicateTitles}</strong>
+      <span class="library-summary-note">${missingTitles} gaps · ${duplicateTitles} duplicates</span>
+    </div>`;
+}
+
 function applyLibraryFilters() {
   var prevState = getExpandedState();
   var search = (librarySearchInput && librarySearchInput.value.trim().toLowerCase()) || "";
   var locationValue = (libraryLocationFilter && libraryLocationFilter.value) || "";
   var languageValue = (libraryLanguageFilter && libraryLanguageFilter.value) || "";
+  var sortValue = (librarySortFilter && librarySortFilter.value) || "name-asc";
+  var issueValue = (libraryIssueFilter && libraryIssueFilter.value) || "";
 
   libraryLocations = libraryAllLocations
     .filter(function (loc) {
@@ -209,13 +338,20 @@ function applyLibraryFilters() {
             return !languageValue || lf.name === languageValue;
           })
           .map(function (lf) {
+            var filteredTitles = (lf.titles || [])
+              .map(function (title) {
+                var nextTitle = Object.assign({}, title);
+                nextTitle.insights = buildTitleInsights(nextTitle);
+                return nextTitle;
+              })
+              .filter(function (title) {
+                return matchesTitleQuery(title, search) && matchesIssueFilter(title, issueValue);
+              });
             return {
               name: lf.name,
               total_episodes: lf.total_episodes,
               total_size: lf.total_size,
-              titles: (lf.titles || []).filter(function (title) {
-                return matchesTitleQuery(title, search);
-              }),
+              titles: sortTitles(filteredTitles, sortValue),
             };
           })
           .filter(function (lf) {
@@ -233,15 +369,25 @@ function applyLibraryFilters() {
         label: loc.label,
         custom_path_id: loc.custom_path_id,
         lang_folders: null,
-        titles: (loc.titles || []).filter(function (title) {
-          return matchesTitleQuery(title, search);
-        }),
+        titles: sortTitles(
+          (loc.titles || [])
+            .map(function (title) {
+              var nextTitle = Object.assign({}, title);
+              nextTitle.insights = buildTitleInsights(nextTitle);
+              return nextTitle;
+            })
+            .filter(function (title) {
+              return matchesTitleQuery(title, search) && matchesIssueFilter(title, issueValue);
+            }),
+          sortValue,
+        ),
       };
     })
     .filter(function (loc) {
       return (loc.lang_folders && loc.lang_folders.length) || (loc.titles && loc.titles.length);
     });
 
+  renderLibrarySummary(libraryLocations);
   renderLibrary(libraryLocations);
   restoreExpandedState(prevState);
 }
@@ -288,9 +434,37 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
     );
     html.push('<div class="library-title-main">');
     html.push(renderPoster(title));
+    html.push('<div class="library-title-stack">');
     html.push(
       '<span class="library-title-name">' + escLib(title.folder) + "</span>",
     );
+    if (title.insights) {
+      html.push('<div class="library-title-flags">');
+      if (title.insights.missingCount > 0) {
+        html.push(
+          '<span class="library-issue-chip library-issue-missing">' +
+            title.insights.missingCount +
+            " missing</span>",
+        );
+      }
+      if (title.insights.duplicateCount > 0) {
+        html.push(
+          '<span class="library-issue-chip library-issue-duplicate">' +
+            title.insights.duplicateCount +
+            " duplicate</span>",
+        );
+      }
+      if (
+        title.insights.missingCount === 0 &&
+        title.insights.duplicateCount === 0
+      ) {
+        html.push(
+          '<span class="library-issue-chip library-issue-healthy">Clean</span>',
+        );
+      }
+      html.push("</div>");
+    }
+    html.push("</div>");
     html.push("</div>");
     html.push("</div>");
     html.push('<div class="library-title-right">');
@@ -328,6 +502,32 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
     html.push(
       '<div class="library-title-body" id="libraryTitleBody' + globalTi + '">',
     );
+    if (title.insights) {
+      html.push('<div class="library-title-insights">');
+      html.push(
+        '<span>' +
+          title.insights.seasonCount +
+          " seasons · " +
+          title.total_episodes +
+          " episodes</span>",
+      );
+      if (title.insights.missingCount > 0) {
+        html.push(
+          '<span class="library-title-insight-warning">' +
+            title.insights.missingCount +
+            " episode gaps detected</span>",
+        );
+      } else if (title.insights.duplicateCount > 0) {
+        html.push(
+          '<span class="library-title-insight-warning">' +
+            title.insights.duplicateCount +
+            " duplicates detected</span>",
+        );
+      } else {
+        html.push("<span>Folder looks clean</span>");
+      }
+      html.push("</div>");
+    }
     var seasonPad = padLeft + 16;
     var epPad = padLeft + 32;
     seasonKeys.forEach(function (skey) {
@@ -664,6 +864,12 @@ if (libraryLocationFilter) {
 }
 if (libraryLanguageFilter) {
   libraryLanguageFilter.addEventListener("change", applyLibraryFilters);
+}
+if (librarySortFilter) {
+  librarySortFilter.addEventListener("change", applyLibraryFilters);
+}
+if (libraryIssueFilter) {
+  libraryIssueFilter.addEventListener("change", applyLibraryFilters);
 }
 
 loadLibrary();

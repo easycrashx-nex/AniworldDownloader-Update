@@ -5,6 +5,7 @@ const disableEnglishSubCb = document.getElementById("disableEnglishSub");
 const experimentalFilmpalastCb = document.getElementById(
   "experimentalFilmpalast",
 );
+const uiModeSelect = document.getElementById("uiMode");
 const syncScheduleSelect = document.getElementById("syncSchedule");
 const syncLanguageSelect = document.getElementById("syncLanguage");
 const syncProviderSelect = document.getElementById("syncProvider");
@@ -30,6 +31,7 @@ function refreshSettingsSelects() {
   if (syncScheduleSelect) window.refreshCustomSelect(syncScheduleSelect);
   if (syncLanguageSelect) window.refreshCustomSelect(syncLanguageSelect);
   if (syncProviderSelect) window.refreshCustomSelect(syncProviderSelect);
+  if (uiModeSelect) window.refreshCustomSelect(uiModeSelect);
 }
 
 async function loadSettings() {
@@ -45,6 +47,7 @@ async function loadSettings() {
         disableEnglishSubCb.checked = data.disable_english_sub === "1";
       if (experimentalFilmpalastCb)
         experimentalFilmpalastCb.checked = data.experimental_filmpalast === "1";
+      if (uiModeSelect) uiModeSelect.value = data.ui_mode || "cozy";
       if (syncScheduleSelect && data.sync_schedule)
         syncScheduleSelect.value = data.sync_schedule;
 
@@ -136,6 +139,19 @@ async function saveExperimentalFilmpalast() {
     );
   } catch (e) {
     showToast("Failed to save development setting: " + e.message);
+  }
+}
+
+async function saveUiMode() {
+  if (!uiModeSelect) return;
+  try {
+    await updateSettings({ ui_mode: uiModeSelect.value });
+    if (typeof window.applyUiDensity === "function") {
+      window.applyUiDensity(uiModeSelect.value);
+    }
+    showToast("UI mode saved");
+  } catch (e) {
+    showToast("Failed to save UI mode: " + e.message);
   }
 }
 

@@ -25,6 +25,7 @@ from .db import (
     get_db,
     has_any_admin,
     list_users,
+    record_audit_event,
     update_user_role,
     verify_user,
 )
@@ -180,6 +181,13 @@ def login():
             session["user_id"] = user["id"]
             session["user_name"] = user["username"]
             session["user_role"] = user["role"]
+            record_audit_event(
+                "auth.login",
+                username=user["username"],
+                subject_type="auth",
+                subject="Login",
+                details={"method": "local"},
+            )
             return redirect(url_for("index"))
         error = err
 
@@ -194,6 +202,14 @@ def login():
 
 @auth_bp.route("/logout")
 def logout():
+    username = session.get("user_name") or ""
+    if username:
+        record_audit_event(
+            "auth.logout",
+            username=username,
+            subject_type="auth",
+            subject="Logout",
+        )
     session.clear()
     return redirect(url_for("auth.login"))
 
@@ -363,6 +379,14 @@ def admin_create_user():
 
     try:
         uid = create_user(username, password, role)
+        actor = session.get("user_name") or ""
+        record_audit_event(
+            "user.created",
+            username=actor,
+            subject_type="user",
+            subject=username,
+            details={"user_id": uid, "role": role},
+        )
         return jsonify({"id": uid, "username": username, "role": role})
     except Exception as e:
         return jsonify({"error": str(e)}), 409
@@ -373,9 +397,21 @@ def admin_create_user():
 def admin_delete_user(user_id):
     if user_id == session.get("user_id"):
         return jsonify({"error": "Cannot delete your own account"}), 400
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+    finally:
+        conn.close()
     ok, err = delete_user(user_id)
     if not ok:
         return jsonify({"error": err}), 400
+    record_audit_event(
+        "user.deleted",
+        username=session.get("user_name") or "",
+        subject_type="user",
+        subject=(row["username"] if row else f"User #{user_id}"),
+        details={"user_id": user_id},
+    )
     return jsonify({"ok": True})
 
 
@@ -384,7 +420,26 @@ def admin_delete_user(user_id):
 def admin_update_role(user_id):
     data = request.get_json(silent=True) or {}
     new_role = data.get("role", "")
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT username, role FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    finally:
+        conn.close()
     ok, err = update_user_role(user_id, new_role)
     if not ok:
         return jsonify({"error": err}), 400
+    record_audit_event(
+        "user.role_updated",
+        username=session.get("user_name") or "",
+        subject_type="user",
+        subject=(row["username"] if row else f"User #{user_id}"),
+        details={
+            "user_id": user_id,
+            "from_role": row["role"] if row else None,
+            "to_role": new_role,
+        },
+    )
     return jsonify({"ok": True})

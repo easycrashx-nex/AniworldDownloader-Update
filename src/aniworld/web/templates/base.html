@@ -22,7 +22,7 @@
     {% block styles %}{% endblock %}
   </head>
 
-  <body>
+  <body data-ui-density="{{ ui_mode|default('cozy') }}">
     <div class="app-background">
       <canvas
         class="network-canvas"
@@ -33,7 +33,7 @@
 
     {% set browse_active = request.endpoint in ['index', 'library_page', 'favorites_page'] %}
     {% set stats_active = request.endpoint in ['stats_page', 'timeline_page', 'radar_page'] %}
-    {% set settings_active = request.endpoint in ['settings_page', 'autosync_page'] %}
+    {% set settings_active = request.endpoint in ['settings_page', 'autosync_page', 'provider_health_page', 'audit_page'] %}
 
     <div class="app-shell">
       <div class="top-bar">
@@ -168,14 +168,50 @@
                   >Manage tracked shows and trigger sync runs.</span
                 >
               </a>
+              <a
+                href="{{ url_for('provider_health_page') }}"
+                class="nav-dropdown-link {% if request.endpoint == 'provider_health_page' %}active{% endif %}"
+              >
+                <span class="nav-dropdown-label">Provider Health</span>
+                <span class="nav-dropdown-note"
+                  >See which hosts are healthy, active, or currently noisy.</span
+                >
+              </a>
+              <a
+                href="{{ url_for('audit_page') }}"
+                class="nav-dropdown-link {% if request.endpoint == 'audit_page' %}active{% endif %}"
+              >
+                <span class="nav-dropdown-label">Audit Log</span>
+                <span class="nav-dropdown-note"
+                  >Track account actions, queue changes, and sync activity.</span
+                >
+              </a>
             </div>
           </div>
 
           {% if auth_enabled and current_user %}
-          <span class="top-bar-user">{{ current_user.username }}</span>
-          <a href="{{ url_for('auth.logout') }}" class="top-bar-link"
-            >Logout</a
-          >
+          <div class="nav-menu nav-menu-profile">
+            <button
+              type="button"
+              class="top-bar-user nav-menu-trigger"
+            >
+              {{ current_user.username }}
+            </button>
+            <div class="nav-dropdown nav-dropdown-right">
+              <div class="nav-dropdown-static">
+                <span class="nav-dropdown-label">{{ current_user.username }}</span>
+                <span class="nav-dropdown-note"
+                  >{{ 'Administrator' if current_user.role == 'admin' else 'Signed in' }}</span
+                >
+              </div>
+              <a href="{{ url_for('auth.logout') }}" class="nav-dropdown-link">
+                <span class="nav-dropdown-label">Logout</span>
+                <span class="nav-dropdown-note"
+                  >Sign out from this account.</span
+                >
+              </a>
+            </div>
+          </div>
           {% endif %}
         </div>
       </div>

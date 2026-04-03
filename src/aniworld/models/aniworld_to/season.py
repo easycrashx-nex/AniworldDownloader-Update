@@ -3,6 +3,22 @@ import re
 from ...config import ANIWORLD_SEASON_PATTERN, GLOBAL_SESSION, logger
 from .episode import AniworldEpisode
 
+LANGUAGE_FLAG_MAP = {
+    "german.svg": "German Dub",
+    "japanese-german.svg": "German Sub",
+    "japanese-english.svg": "English Sub",
+    "english.svg": "English Dub",
+}
+
+
+def _extract_episode_languages(tr_html):
+    labels = []
+    lowered = tr_html.lower()
+    for asset_name, label in LANGUAGE_FLAG_MAP.items():
+        if asset_name in lowered and label not in labels:
+            labels.append(label)
+    return labels
+
 
 class AniworldSeason:
     """
@@ -289,16 +305,16 @@ class AniworldSeason:
             if ep_url:
                 # For movies, ep_num might be None, but we can still create the episode object
                 # The AniworldEpisode class should handle None episode_number appropriately
-                episodes.append(
-                    AniworldEpisode(
-                        series=self.series,
-                        season=self,
-                        url=ep_url,
-                        episode_number=ep_num,
-                        title_de=title_de,
-                        title_en=title_en,
-                    )
+                episode = AniworldEpisode(
+                    series=self.series,
+                    season=self,
+                    url=ep_url,
+                    episode_number=ep_num,
+                    title_de=title_de,
+                    title_en=title_en,
                 )
+                episode.available_languages = _extract_episode_languages(tr_html)
+                episodes.append(episode)
 
             pos = tr_end
 

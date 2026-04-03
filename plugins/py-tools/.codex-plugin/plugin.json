@@ -1,0 +1,42 @@
+{
+  "name": "py-tools",
+  "version": "0.1.0",
+  "description": "Use the Windows py launcher from Codex tasks and keep small Python helpers inside the plugin.",
+  "author": {
+    "name": "Local Workspace",
+    "email": "",
+    "url": ""
+  },
+  "homepage": "https://github.com/easycrashx-nex/AniworldDownloader-Update",
+  "repository": "https://github.com/easycrashx-nex/AniworldDownloader-Update",
+  "license": "MIT",
+  "keywords": [
+    "python",
+    "py",
+    "windows",
+    "codex",
+    "automation"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Py Tools",
+    "shortDescription": "Run small Python helpers through the Windows py launcher",
+    "longDescription": "Adds a Codex skill for Python-oriented tasks on Windows and ships a thin PowerShell wrapper plus a demo script so py-based workflows have a consistent entry point.",
+    "developerName": "Local Workspace",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/easycrashx-nex/AniworldDownloader-Update",
+    "privacyPolicyURL": "https://github.com/easycrashx-nex/AniworldDownloader-Update",
+    "termsOfServiceURL": "https://github.com/easycrashx-nex/AniworldDownloader-Update",
+    "defaultPrompt": [
+      "Run a small Python helper through the Windows py launcher",
+      "Inspect the local Python runtime and environment",
+      "Use py for quick data processing in this workspace"
+    ],
+    "brandColor": "#3776AB",
+    "screenshots": []
+  }
+}

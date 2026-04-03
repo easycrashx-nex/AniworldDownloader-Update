@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 
@@ -28,6 +29,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sso_identity
 ON users (sso_issuer, sso_subject)
 WHERE sso_issuer IS NOT NULL AND sso_subject IS NOT NULL;
 """
+
+_CREATE_USER_PREFERENCES_TABLE = """\
+CREATE TABLE IF NOT EXISTS user_preferences (
+    username TEXT NOT NULL DEFAULT '',
+    pref_key TEXT NOT NULL,
+    pref_value TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (username, pref_key)
+);
+"""
+
+_CREATE_AUDIT_LOG_TABLE = """\
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    subject_type TEXT,
+    subject TEXT,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+_CREATE_AUDIT_LOG_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_created_at "
+    "ON audit_log (created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_username "
+    "ON audit_log (username, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_log_action "
+    "ON audit_log (action, created_at DESC)",
+)
 
 
 def get_db():
@@ -824,13 +856,19 @@ def remove_autosync_job(job_id):
 _CREATE_FAVORITES_TABLE = """\
 CREATE TABLE IF NOT EXISTS favorites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL DEFAULT '',
     title TEXT NOT NULL,
-    series_url TEXT NOT NULL UNIQUE,
+    series_url TEXT NOT NULL,
     poster_url TEXT,
     site TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_opened_at TEXT
 );
+"""
+
+_CREATE_FAVORITES_UNIQUE_INDEX = """\
+CREATE UNIQUE INDEX IF NOT EXISTS idx_favorites_username_series
+ON favorites (username, series_url);
 """
 
 _CREATE_SERIES_META_TABLE = """\
@@ -848,6 +886,7 @@ CREATE TABLE IF NOT EXISTS series_meta_cache (
 _CREATE_SEARCH_HISTORY_TABLE = """\
 CREATE TABLE IF NOT EXISTS search_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL DEFAULT '',
     site TEXT NOT NULL,
     keyword TEXT NOT NULL,
     normalized_keyword TEXT NOT NULL,
@@ -856,9 +895,125 @@ CREATE TABLE IF NOT EXISTS search_history (
 """
 
 _CREATE_SEARCH_HISTORY_INDEX = """\
-CREATE INDEX IF NOT EXISTS idx_search_history_site_keyword
-ON search_history (site, normalized_keyword, last_used_at DESC);
+CREATE INDEX IF NOT EXISTS idx_search_history_user_site_keyword
+ON search_history (username, site, normalized_keyword, last_used_at DESC);
 """
+
+
+def _scope_username(username):
+    return (username or "").strip()
+
+
+def init_user_preferences_db():
+    ANIWORLD_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    conn = get_db()
+    try:
+        conn.execute(_CREATE_USER_PREFERENCES_TABLE)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_user_preference(username, pref_key, default=None):
+    scope_username = _scope_username(username)
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT pref_value FROM user_preferences WHERE username = ? AND pref_key = ?",
+            (scope_username, pref_key),
+        ).fetchone()
+        return row["pref_value"] if row else default
+    finally:
+        conn.close()
+
+
+def set_user_preference(username, pref_key, pref_value):
+    scope_username = _scope_username(username)
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO user_preferences (username, pref_key, pref_value, updated_at) "
+            "VALUES (?, ?, ?, datetime('now')) "
+            "ON CONFLICT(username, pref_key) DO UPDATE SET "
+            "pref_value = excluded.pref_value, updated_at = datetime('now')",
+            (scope_username, pref_key, pref_value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init_audit_log_db():
+    ANIWORLD_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    conn = get_db()
+    try:
+        conn.execute(_CREATE_AUDIT_LOG_TABLE)
+        for stmt in _CREATE_AUDIT_LOG_INDEXES:
+            conn.execute(stmt)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_audit_event(
+    action, username=None, subject_type=None, subject=None, details=None
+):
+    scope_username = _scope_username(username)
+    payload = json.dumps(details or {}, ensure_ascii=False)
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO audit_log (username, action, subject_type, subject, details_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (scope_username, action, subject_type, subject, payload),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_audit_events(limit=80, username=None, action=None):
+    limit = max(1, min(int(limit or 80), 200))
+    conn = get_db()
+    try:
+        where = []
+        params = []
+        if username is not None:
+            where.append("COALESCE(username, '') = ?")
+            params.append(_scope_username(username))
+        if action:
+            where.append("action = ?")
+            params.append(action)
+        where_clause = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = conn.execute(
+            "SELECT id, username, action, subject_type, subject, details_json, created_at "
+            f"FROM audit_log {where_clause} "
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["details"] = json.loads(item.pop("details_json") or "{}")
+            except Exception:
+                item["details"] = {}
+            items.append(item)
+        return items
+    finally:
+        conn.close()
+
+
+def list_audit_users():
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT username, COUNT(*) AS cnt, MAX(created_at) AS last_seen "
+            "FROM audit_log GROUP BY username ORDER BY cnt DESC, username ASC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def init_favorites_db():
@@ -866,6 +1021,19 @@ def init_favorites_db():
     conn = get_db()
     try:
         conn.execute(_CREATE_FAVORITES_TABLE)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(favorites)")}
+        if "username" not in columns:
+            conn.execute(
+                "ALTER TABLE favorites RENAME TO favorites_legacy"
+            )
+            conn.execute(_CREATE_FAVORITES_TABLE)
+            conn.execute(
+                "INSERT INTO favorites (id, username, title, series_url, poster_url, site, created_at, last_opened_at) "
+                "SELECT id, '', title, series_url, poster_url, site, created_at, last_opened_at "
+                "FROM favorites_legacy"
+            )
+            conn.execute("DROP TABLE favorites_legacy")
+        conn.execute(_CREATE_FAVORITES_UNIQUE_INDEX)
         conn.commit()
     finally:
         conn.close()
@@ -886,18 +1054,26 @@ def init_search_history_db():
     conn = get_db()
     try:
         conn.execute(_CREATE_SEARCH_HISTORY_TABLE)
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(search_history)")
+        }
+        if "username" not in columns:
+            conn.execute(
+                "ALTER TABLE search_history ADD COLUMN username TEXT NOT NULL DEFAULT ''"
+            )
         conn.execute(_CREATE_SEARCH_HISTORY_INDEX)
         conn.commit()
     finally:
         conn.close()
 
 
-def add_favorite(title, series_url, poster_url=None, site=None):
+def add_favorite(title, series_url, poster_url=None, site=None, username=None):
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
         row = conn.execute(
-            "SELECT id, poster_url, site FROM favorites WHERE series_url = ?",
-            (series_url,),
+            "SELECT id, poster_url, site FROM favorites WHERE username = ? AND series_url = ?",
+            (scope_username, series_url),
         ).fetchone()
         if row:
             conn.execute(
@@ -912,8 +1088,8 @@ def add_favorite(title, series_url, poster_url=None, site=None):
             conn.commit()
             return row["id"]
         cur = conn.execute(
-            "INSERT INTO favorites (title, series_url, poster_url, site) VALUES (?, ?, ?, ?)",
-            (title, series_url, poster_url, site),
+            "INSERT INTO favorites (username, title, series_url, poster_url, site) VALUES (?, ?, ?, ?, ?)",
+            (scope_username, title, series_url, poster_url, site),
         )
         conn.commit()
         return cur.lastrowid
@@ -921,43 +1097,54 @@ def add_favorite(title, series_url, poster_url=None, site=None):
         conn.close()
 
 
-def remove_favorite(series_url):
-    conn = get_db()
-    try:
-        conn.execute("DELETE FROM favorites WHERE series_url = ?", (series_url,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def list_favorites():
-    conn = get_db()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM favorites ORDER BY COALESCE(last_opened_at, created_at) DESC, id DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def touch_favorite(series_url):
+def remove_favorite(series_url, username=None):
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
         conn.execute(
-            "UPDATE favorites SET last_opened_at = datetime('now') WHERE series_url = ?",
-            (series_url,),
+            "DELETE FROM favorites WHERE username = ? AND series_url = ?",
+            (scope_username, series_url),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def get_favorite(series_url):
+def list_favorites(username=None):
+    scope_username = _scope_username(username)
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM favorites WHERE username = ? "
+            "ORDER BY COALESCE(last_opened_at, created_at) DESC, id DESC",
+            (scope_username,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def touch_favorite(series_url, username=None):
+    scope_username = _scope_username(username)
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE favorites SET last_opened_at = datetime('now') "
+            "WHERE username = ? AND series_url = ?",
+            (scope_username, series_url),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_favorite(series_url, username=None):
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
         row = conn.execute(
-            "SELECT * FROM favorites WHERE series_url = ?", (series_url,)
+            "SELECT * FROM favorites WHERE username = ? AND series_url = ?",
+            (scope_username, series_url),
         ).fetchone()
         return dict(row) if row else None
     finally:
@@ -1059,16 +1246,17 @@ def get_recent_series_references(limit=500):
         conn.close()
 
 
-def record_search_query(site, keyword):
+def record_search_query(site, keyword, username=None):
     normalized = " ".join((keyword or "").strip().lower().split())
     if not normalized:
         return
 
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
         row = conn.execute(
-            "SELECT id FROM search_history WHERE site = ? AND normalized_keyword = ?",
-            (site, normalized),
+            "SELECT id FROM search_history WHERE username = ? AND site = ? AND normalized_keyword = ?",
+            (scope_username, site, normalized),
         ).fetchone()
         if row:
             conn.execute(
@@ -1078,37 +1266,39 @@ def record_search_query(site, keyword):
             )
         else:
             conn.execute(
-                "INSERT INTO search_history (site, keyword, normalized_keyword) "
-                "VALUES (?, ?, ?)",
-                (site, keyword.strip(), normalized),
+                "INSERT INTO search_history (username, site, keyword, normalized_keyword) "
+                "VALUES (?, ?, ?, ?)",
+                (scope_username, site, keyword.strip(), normalized),
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def list_recent_searches(site, limit=6):
+def list_recent_searches(site, limit=6, username=None):
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
         rows = conn.execute(
             "SELECT keyword, last_used_at FROM search_history "
-            "WHERE site = ? "
+            "WHERE username = ? AND site = ? "
             "ORDER BY last_used_at DESC LIMIT ?",
-            (site, limit),
+            (scope_username, site, limit),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def get_search_suggestions(site, query="", limit=8):
+def get_search_suggestions(site, query="", limit=8, username=None):
     normalized = " ".join((query or "").strip().lower().split())
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
         if normalized:
             rows = conn.execute(
                 "SELECT keyword, last_used_at FROM search_history "
-                "WHERE site = ? AND normalized_keyword LIKE ? "
+                "WHERE username = ? AND site = ? AND normalized_keyword LIKE ? "
                 "ORDER BY "
                 "CASE WHEN normalized_keyword = ? THEN 0 "
                 "WHEN normalized_keyword LIKE ? THEN 1 "
@@ -1116,6 +1306,7 @@ def get_search_suggestions(site, query="", limit=8):
                 "last_used_at DESC "
                 "LIMIT ?",
                 (
+                    scope_username,
                     site,
                     f"%{normalized}%",
                     normalized,
@@ -1126,9 +1317,9 @@ def get_search_suggestions(site, query="", limit=8):
         else:
             rows = conn.execute(
                 "SELECT keyword, last_used_at FROM search_history "
-                "WHERE site = ? "
+                "WHERE username = ? AND site = ? "
                 "ORDER BY last_used_at DESC LIMIT ?",
-                (site, limit),
+                (scope_username, site, limit),
             ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -1138,29 +1329,37 @@ def get_search_suggestions(site, query="", limit=8):
 # ===== Statistics =====
 
 
-def get_sync_stats():
+def get_sync_stats(username=None):
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
-        total = conn.execute("SELECT COUNT(*) AS cnt FROM autosync_jobs").fetchone()[
-            "cnt"
-        ]
+        where_clause = "WHERE COALESCE(added_by, '') = ?"
+        total = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM autosync_jobs {where_clause}",
+            (scope_username,),
+        ).fetchone()["cnt"]
         enabled = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM autosync_jobs WHERE enabled = 1"
+            f"SELECT COUNT(*) AS cnt FROM autosync_jobs {where_clause} AND enabled = 1",
+            (scope_username,),
         ).fetchone()["cnt"]
         disabled = total - enabled
         last_check = conn.execute(
-            "SELECT MAX(last_check) AS lc FROM autosync_jobs"
+            f"SELECT MAX(last_check) AS lc FROM autosync_jobs {where_clause}",
+            (scope_username,),
         ).fetchone()["lc"]
         last_new = conn.execute(
-            "SELECT MAX(last_new_found) AS ln FROM autosync_jobs"
+            f"SELECT MAX(last_new_found) AS ln FROM autosync_jobs {where_clause}",
+            (scope_username,),
         ).fetchone()["ln"]
         total_eps = conn.execute(
-            "SELECT COALESCE(SUM(episodes_found), 0) AS s FROM autosync_jobs"
+            f"SELECT COALESCE(SUM(episodes_found), 0) AS s FROM autosync_jobs {where_clause}",
+            (scope_username,),
         ).fetchone()["s"]
         jobs = conn.execute(
             "SELECT id, title, series_url, language, provider, enabled, "
             "last_check, last_new_found, episodes_found, added_by, created_at "
-            "FROM autosync_jobs ORDER BY id"
+            f"FROM autosync_jobs {where_clause} ORDER BY id",
+            (scope_username,),
         ).fetchall()
         return {
             "total_jobs": total,
@@ -1175,20 +1374,25 @@ def get_sync_stats():
         conn.close()
 
 
-def get_queue_stats():
+def get_queue_stats(username=None):
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
-        total = conn.execute("SELECT COUNT(*) AS cnt FROM download_queue").fetchone()[
-            "cnt"
-        ]
+        where_clause = "WHERE COALESCE(username, '') = ?"
+        total = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM download_queue {where_clause}",
+            (scope_username,),
+        ).fetchone()["cnt"]
         by_status = {}
         for row in conn.execute(
-            "SELECT status, COUNT(*) AS cnt FROM download_queue GROUP BY status"
+            f"SELECT status, COUNT(*) AS cnt FROM download_queue {where_clause} GROUP BY status",
+            (scope_username,),
         ).fetchall():
             by_status[row["status"]] = row["cnt"]
         running = conn.execute(
             "SELECT title, current_episode, total_episodes FROM download_queue "
-            "WHERE status = 'running' LIMIT 1"
+            f"{where_clause} AND status = 'running' LIMIT 1",
+            (scope_username,),
         ).fetchone()
         return {
             "total": total,
@@ -1199,60 +1403,75 @@ def get_queue_stats():
         conn.close()
 
 
-def get_general_stats():
+def get_general_stats(username=None):
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
         total_downloads = conn.execute(
             "SELECT COUNT(*) AS cnt FROM download_archive "
-            "WHERE status IN ('completed', 'failed')"
+            "WHERE COALESCE(username, '') = ? AND status IN ('completed', 'failed')",
+            (scope_username,),
         ).fetchone()["cnt"]
         completed = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_archive WHERE status = 'completed'"
+            "SELECT COUNT(*) AS cnt FROM download_archive "
+            "WHERE COALESCE(username, '') = ? AND status = 'completed'",
+            (scope_username,),
         ).fetchone()["cnt"]
         failed = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_archive WHERE status = 'failed'"
+            "SELECT COUNT(*) AS cnt FROM download_archive "
+            "WHERE COALESCE(username, '') = ? AND status = 'failed'",
+            (scope_username,),
         ).fetchone()["cnt"]
         total_episodes = conn.execute(
             "SELECT COALESCE(SUM(total_episodes), 0) AS s FROM download_archive "
-            "WHERE status = 'completed'"
+            "WHERE COALESCE(username, '') = ? AND status = 'completed'",
+            (scope_username,),
         ).fetchone()["s"]
         last_24h = conn.execute(
             "SELECT COUNT(*) AS cnt FROM download_archive "
-            "WHERE status = 'completed' "
+            "WHERE COALESCE(username, '') = ? AND status = 'completed' "
             "AND completed_at >= datetime('now', '-1 day')"
+            ,
+            (scope_username,),
         ).fetchone()["cnt"]
         # Average duration (completed items with both timestamps)
         avg_dur = conn.execute(
             "SELECT AVG("
             "  (julianday(completed_at) - julianday(created_at)) * 86400"
             ") AS avg_s FROM download_archive "
-            "WHERE status = 'completed' AND completed_at IS NOT NULL"
+            "WHERE COALESCE(username, '') = ? AND status = 'completed' AND completed_at IS NOT NULL",
+            (scope_username,),
         ).fetchone()["avg_s"]
         avg_eps = conn.execute(
             "SELECT AVG(total_episodes) AS avg_eps FROM download_archive "
-            "WHERE status = 'completed'"
+            "WHERE COALESCE(username, '') = ? AND status = 'completed'",
+            (scope_username,),
         ).fetchone()["avg_eps"]
         # Most downloaded titles
         top_titles = conn.execute(
             "SELECT title, COUNT(*) AS cnt FROM download_archive "
-            "WHERE status = 'completed' GROUP BY title "
-            "ORDER BY cnt DESC LIMIT 10"
+            "WHERE COALESCE(username, '') = ? AND status = 'completed' "
+            "GROUP BY title ORDER BY cnt DESC LIMIT 10",
+            (scope_username,),
         ).fetchall()
         # Episodes per language
         by_language = conn.execute(
             "SELECT language, COUNT(*) AS cnt, "
             "COALESCE(SUM(total_episodes), 0) AS eps "
-            "FROM download_archive WHERE status = 'completed' "
-            "GROUP BY language ORDER BY cnt DESC"
+            "FROM download_archive WHERE COALESCE(username, '') = ? AND status = 'completed' "
+            "GROUP BY language ORDER BY cnt DESC",
+            (scope_username,),
         ).fetchall()
         # Anime vs Series (heuristic: aniworld.to = anime, s.to = series)
         anime_count = conn.execute(
             "SELECT COUNT(*) AS cnt FROM download_archive "
-            "WHERE status = 'completed' AND series_url LIKE '%aniworld.to%'"
+            "WHERE COALESCE(username, '') = ? AND status = 'completed' AND series_url LIKE '%aniworld.to%'",
+            (scope_username,),
         ).fetchone()["cnt"]
         series_count = conn.execute(
             "SELECT COUNT(*) AS cnt FROM download_archive "
-            "WHERE status = 'completed' AND series_url LIKE '%s.to%'"
+            "WHERE COALESCE(username, '') = ? AND status = 'completed' AND series_url LIKE '%s.to%'",
+            (scope_username,),
         ).fetchone()["cnt"]
         return {
             "total_downloads": total_downloads,
@@ -1279,38 +1498,42 @@ def get_general_stats():
         conn.close()
 
 
-def get_recent_activity(limit=10):
-    conn = get_db()
-    try:
-        rows = conn.execute(
-            "SELECT id, title, series_url, language, provider, status, total_episodes, "
-            "source, created_at, completed_at, username, custom_path_id "
-            "FROM download_queue "
-            "ORDER BY COALESCE(completed_at, created_at) DESC, id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-def get_download_history(limit=40):
+def get_recent_activity(limit=10, username=None):
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
         rows = conn.execute(
             "SELECT id, title, series_url, language, provider, status, total_episodes, "
             "source, created_at, completed_at, username, custom_path_id, errors "
             "FROM download_queue "
-            "WHERE status IN ('completed', 'failed', 'cancelled') "
+            "WHERE COALESCE(username, '') = ? "
             "ORDER BY COALESCE(completed_at, created_at) DESC, id DESC LIMIT ?",
-            (limit,),
+            (scope_username, limit),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def get_provider_quality():
+def get_download_history(limit=40, username=None):
+    scope_username = _scope_username(username)
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, series_url, language, provider, status, total_episodes, "
+            "source, created_at, completed_at, username, custom_path_id, errors "
+            "FROM download_queue "
+            "WHERE COALESCE(username, '') = ? AND status IN ('completed', 'failed', 'cancelled') "
+            "ORDER BY COALESCE(completed_at, created_at) DESC, id DESC LIMIT ?",
+            (scope_username, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_provider_quality(username=None):
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
         rows = conn.execute(
@@ -1320,16 +1543,121 @@ def get_provider_quality():
             "SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled, "
             "COALESCE(SUM(CASE WHEN status = 'completed' THEN total_episodes ELSE 0 END), 0) AS episodes "
             "FROM download_archive "
-            "GROUP BY provider ORDER BY completed DESC, failed ASC, provider ASC"
+            "WHERE COALESCE(username, '') = ? "
+            "GROUP BY provider ORDER BY completed DESC, failed ASC, provider ASC",
+            (scope_username,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def get_activity_chart(days=7):
+def get_provider_health(username=None):
+    scope_username = _scope_username(username)
+    conn = get_db()
+    try:
+        archive_rows = conn.execute(
+            "SELECT provider, "
+            "SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed, "
+            "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, "
+            "SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled, "
+            "COALESCE(SUM(CASE WHEN status = 'completed' THEN total_episodes ELSE 0 END), 0) AS episodes, "
+            "MAX(CASE WHEN status = 'completed' THEN completed_at END) AS last_success_at, "
+            "MAX(CASE WHEN status = 'failed' THEN completed_at END) AS last_failure_at, "
+            "SUM(CASE WHEN status = 'failed' AND completed_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) AS failed_24h "
+            "FROM download_archive "
+            "WHERE COALESCE(username, '') = ? "
+            "GROUP BY provider",
+            (scope_username,),
+        ).fetchall()
+        queue_rows = conn.execute(
+            "SELECT provider, "
+            "SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running, "
+            "SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued "
+            "FROM download_queue "
+            "WHERE COALESCE(username, '') = ? "
+            "GROUP BY provider",
+            (scope_username,),
+        ).fetchall()
+
+        items = {}
+        for row in archive_rows:
+            items[row["provider"]] = {
+                "provider": row["provider"],
+                "completed": int(row["completed"] or 0),
+                "failed": int(row["failed"] or 0),
+                "cancelled": int(row["cancelled"] or 0),
+                "episodes": int(row["episodes"] or 0),
+                "running": 0,
+                "queued": 0,
+                "failed_24h": int(row["failed_24h"] or 0),
+                "last_success_at": row["last_success_at"],
+                "last_failure_at": row["last_failure_at"],
+            }
+
+        for row in queue_rows:
+            item = items.setdefault(
+                row["provider"],
+                {
+                    "provider": row["provider"],
+                    "completed": 0,
+                    "failed": 0,
+                    "cancelled": 0,
+                    "episodes": 0,
+                    "running": 0,
+                    "queued": 0,
+                    "failed_24h": 0,
+                    "last_success_at": None,
+                    "last_failure_at": None,
+                },
+            )
+            item["running"] = int(row["running"] or 0)
+            item["queued"] = int(row["queued"] or 0)
+
+        ordered = []
+        for item in items.values():
+            total_finished = item["completed"] + item["failed"]
+            success_rate = (
+                round((item["completed"] / total_finished) * 100)
+                if total_finished
+                else 0
+            )
+            if item["running"] > 0:
+                health = "active"
+            elif total_finished == 0 and item["queued"] == 0:
+                health = "idle"
+            elif success_rate >= 85 and item["failed_24h"] <= 1:
+                health = "healthy"
+            elif success_rate >= 60:
+                health = "watch"
+            else:
+                health = "poor"
+            ordered.append(
+                {
+                    **item,
+                    "success_rate": success_rate,
+                    "health": health,
+                }
+            )
+
+        priority = {"active": 0, "healthy": 1, "watch": 2, "poor": 3, "idle": 4}
+        ordered.sort(
+            key=lambda item: (
+                priority.get(item["health"], 9),
+                -(item["running"] + item["queued"]),
+                -(item["completed"] + item["failed"]),
+                item["provider"],
+            )
+        )
+        return ordered
+    finally:
+        conn.close()
+
+
+def get_activity_chart(days=7, username=None):
     from datetime import datetime, timedelta
 
+    scope_username = _scope_username(username)
     conn = get_db()
     try:
         since = (datetime.utcnow() - timedelta(days=max(days - 1, 0))).strftime(
@@ -1338,9 +1666,9 @@ def get_activity_chart(days=7):
         rows = conn.execute(
             "SELECT substr(completed_at, 1, 10) AS day, COUNT(*) AS completed "
             "FROM download_archive "
-            "WHERE status = 'completed' AND completed_at >= ? "
+            "WHERE COALESCE(username, '') = ? AND status = 'completed' AND completed_at >= ? "
             "GROUP BY substr(completed_at, 1, 10)",
-            (since,),
+            (scope_username, since),
         ).fetchall()
         row_map = {r["day"]: r["completed"] for r in rows}
         result = []

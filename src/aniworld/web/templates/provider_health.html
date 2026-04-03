@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Provider Health - AniWorld Downloader{% endblock %}
+{% block content %}
+<div class="settings-container insight-shell">
+  <div class="page-header">
+    <span class="eyebrow">Settings</span>
+    <h1>Provider Health</h1>
+    <p class="page-description">
+      Watch host stability, recent failures, and current queue pressure without
+      digging through individual jobs.
+    </p>
+  </div>
+
+  <section class="dashboard-panel">
+    <div class="section-heading">
+      <div>
+        <span class="section-kicker">Live</span>
+        <h2 class="browse-heading">Host Overview</h2>
+      </div>
+      <p class="section-description">
+        Running jobs refresh automatically while the page is open.
+      </p>
+    </div>
+    <div class="provider-health-grid" id="providerHealthList">
+      <div class="stats-empty">Loading provider health...</div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='provider-health.js') }}"></script>
+{% endblock %}

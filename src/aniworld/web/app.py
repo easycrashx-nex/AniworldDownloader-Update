@@ -51,8 +51,12 @@ from .db import (
     get_favorite,
     get_general_stats,
     get_provider_quality,
+    get_provider_health,
     get_search_suggestions,
+    get_user_preference,
     get_recent_activity,
+    list_audit_events,
+    list_audit_users,
     list_recent_searches,
     get_recent_series_references,
     get_next_queued,
@@ -64,9 +68,11 @@ from .db import (
     init_autosync_db,
     init_custom_paths_db,
     init_favorites_db,
+    init_audit_log_db,
     init_queue_db,
     init_search_history_db,
     init_series_meta_db,
+    init_user_preferences_db,
     is_queue_cancelled,
     is_series_queued_or_running,
     list_favorites,
@@ -78,9 +84,11 @@ from .db import (
     remove_from_queue,
     retry_failed_queue_items,
     retry_queue_item,
+    record_audit_event,
     record_search_query,
     set_captcha_url,
     clear_captcha_url,
+    set_user_preference,
     set_queue_status,
     touch_favorite,
     upsert_series_meta,
@@ -106,6 +114,11 @@ def _experimental_flags():
     }
 
 
+def _cache_scope_token(username):
+    value = (username or "").strip()
+    return value or "__anon__"
+
+
 def _set_bool_env(name, enabled):
     os.environ[name] = "1" if enabled else "0"
 
@@ -122,7 +135,7 @@ def _resolved_download_path_value():
     return str(Path.home() / "Downloads")
 
 
-def _settings_payload():
+def _settings_payload(ui_mode="cozy"):
     return {
         "download_path": _resolved_download_path_value(),
         "lang_separation": os.environ.get(_ENV_LANG_SEPARATION, "0"),
@@ -133,6 +146,7 @@ def _settings_payload():
         "sync_schedule": os.environ.get(_ENV_SYNC_SCHEDULE, "0"),
         "sync_language": os.environ.get(_ENV_SYNC_LANGUAGE, "German Dub"),
         "sync_provider": os.environ.get(_ENV_SYNC_PROVIDER, "VOE"),
+        "ui_mode": ui_mode or "cozy",
     }
 
 
@@ -658,6 +672,21 @@ def _extract_provider_info(provider_data):
     return provider_info
 
 
+def _episode_language_labels_for_ui(episode, allow_provider_lookup=False):
+    labels = list(getattr(episode, "available_languages", []) or [])
+    if not allow_provider_lookup:
+        return labels
+
+    try:
+        provider_info = _extract_provider_info(episode.provider_data)
+        if provider_info:
+            return list(provider_info.keys())
+    except Exception:
+        pass
+
+    return labels
+
+
 def _rank_provider_candidates(candidates, preferred=None, exclude=None):
     quality_rows = {row["provider"]: row for row in get_provider_quality()}
     ordered = list(dict.fromkeys([name for name in candidates if name and name != exclude]))
@@ -717,6 +746,7 @@ def _download_episode_with_fallback(item, ep_url, selected_path):
     providers_to_try = [item["provider"]]
     tried = []
     errors = []
+    attempt_details = []
 
     while providers_to_try:
         provider_name = providers_to_try.pop(0)
@@ -748,6 +778,12 @@ def _download_episode_with_fallback(item, ep_url, selected_path):
                 ep_url,
                 exc,
             )
+            attempt_details.append(
+                {
+                    "provider": provider_name,
+                    "message": str(exc),
+                }
+            )
             errors.append(f"{provider_name}: {exc}")
             if len(tried) == 1:
                 fallback_candidates = _get_provider_candidates_for_episode(
@@ -759,17 +795,19 @@ def _download_episode_with_fallback(item, ep_url, selected_path):
                     if candidate not in tried and candidate not in providers_to_try:
                         providers_to_try.append(candidate)
 
-    raise RuntimeError(" | ".join(errors) if errors else "All providers failed")
+    err = RuntimeError(" | ".join(errors) if errors else "All providers failed")
+    err.attempt_details = attempt_details
+    raise err
 
 
-def _build_nav_state():
-    queue = get_queue_stats()
-    sync = get_sync_stats()
+def _build_nav_state(username=None):
+    queue = get_queue_stats(username=username)
+    sync = get_sync_stats(username=username)
     return {
         "active_queue": int(queue.get("by_status", {}).get("queued", 0))
         + int(queue.get("by_status", {}).get("running", 0)),
         "failed_queue": int(queue.get("by_status", {}).get("failed", 0)),
-        "favorites": len(list_favorites()),
+        "favorites": len(list_favorites(username=username)),
         "autosync_enabled": int(sync.get("enabled", 0)),
     }
 
@@ -783,24 +821,25 @@ def _get_cached_library_snapshot(include_meta=True):
     return _cache_set(cache_key, snapshot)
 
 
-def _get_cached_stats_payload():
-    cached = _cache_get("stats:summary", 4.0)
+def _get_cached_stats_payload(username=None):
+    cache_key = f"stats:summary:{_cache_scope_token(username)}"
+    cached = _cache_get(cache_key, 4.0)
     if cached is not None:
         return cached
 
-    general = get_general_stats()
-    queue = get_queue_stats()
-    sync = get_sync_stats()
+    general = get_general_stats(username=username)
+    queue = get_queue_stats(username=username)
+    sync = get_sync_stats(username=username)
     storage_snapshot = _get_cached_library_snapshot(include_meta=True)
     payload = {
         "general": general,
         "queue": queue,
         "sync": sync,
         "storage": storage_snapshot["summary"],
-        "provider_quality": get_provider_quality(),
-        "activity_chart": get_activity_chart(7),
+        "provider_quality": get_provider_quality(username=username),
+        "activity_chart": get_activity_chart(7, username=username),
     }
-    return _cache_set("stats:summary", payload)
+    return _cache_set(cache_key, payload)
 
 
 def _queue_worker():
@@ -875,7 +914,19 @@ def _queue_worker():
                     _download_episode_with_fallback(item, ep_url, selected_path)
                 except Exception as e:
                     logger.error(f"Download failed for {ep_url}: {e}")
-                    errors.append({"url": ep_url, "error": str(e)})
+                    attempt_details = getattr(e, "attempt_details", None) or []
+                    errors.append(
+                        {
+                            "url": ep_url,
+                            "error": str(e),
+                            "providers_tried": [
+                                detail.get("provider")
+                                for detail in attempt_details
+                                if detail.get("provider")
+                            ],
+                            "attempts": attempt_details,
+                        }
+                    )
                     update_queue_errors(item["id"], json.dumps(errors))
                     _emit_ui_event("queue", "dashboard", "nav", min_interval=0.35)
 
@@ -893,6 +944,20 @@ def _queue_worker():
                     "failed" if errors and len(errors) == len(episodes) else "completed"
                 )
                 set_queue_status(item["id"], status)
+                record_audit_event(
+                    "download.completed" if status == "completed" else "download.failed",
+                    username=item.get("username"),
+                    subject_type="download",
+                    subject=item.get("title"),
+                    details={
+                        "queue_id": item["id"],
+                        "series_url": item.get("series_url"),
+                        "language": item.get("language"),
+                        "provider": item.get("provider"),
+                        "status": status,
+                        "errors": errors[:4],
+                    },
+                )
                 _emit_ui_event("queue", "dashboard", "library", "nav")
 
         except Exception as e:
@@ -1240,14 +1305,21 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
         @app.context_processor
         def _inject_auth():
+            user = get_current_user()
+            username = (
+                user.get("username")
+                if isinstance(user, dict)
+                else getattr(user, "username", None)
+            )
             return {
-                "current_user": get_current_user(),
+                "current_user": user,
                 "auth_enabled": True,
                 "oidc_enabled": app.config.get("OIDC_ENABLED", False),
                 "oidc_display_name": app.config.get("OIDC_DISPLAY_NAME", "SSO"),
                 "force_sso": app.config.get("FORCE_SSO", False),
                 "app_version": app_version,
                 "experimental_flags": _experimental_flags(),
+                "ui_mode": get_user_preference(username, "ui_mode", "cozy"),
             }
     else:
 
@@ -1261,6 +1333,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 "force_sso": False,
                 "app_version": app_version,
                 "experimental_flags": _experimental_flags(),
+                "ui_mode": get_user_preference(None, "ui_mode", "cozy"),
             }
 
     # Initialize download queue, custom paths and autosync (works with or without auth)
@@ -1270,6 +1343,8 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     init_favorites_db()
     init_series_meta_db()
     init_search_history_db()
+    init_user_preferences_db()
+    init_audit_log_db()
 
     # Wire up captcha hooks so the Playwright module can signal the Web UI
     from ..playwright import captcha as _captcha_mod
@@ -1403,15 +1478,19 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                     )
 
         if results:
-            record_search_query(site, keyword)
+            username, _ = _get_current_user_info()
+            record_search_query(site, keyword, username=username)
         return jsonify({"results": results})
 
     @app.route("/api/search/suggestions")
     def api_search_suggestions():
         site = (request.args.get("site") or "aniworld").strip()
         query = (request.args.get("q") or "").strip()
-        suggestions = get_search_suggestions(site, query=query, limit=8)
-        recent = list_recent_searches(site, limit=6)
+        username, _ = _get_current_user_info()
+        suggestions = get_search_suggestions(
+            site, query=query, limit=8, username=username
+        )
+        recent = list_recent_searches(site, limit=6, username=username)
         return jsonify({"suggestions": suggestions, "recent": recent})
 
     @app.route("/api/series")
@@ -1436,7 +1515,8 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 release_year=str(getattr(target, "release_year", "") or ""),
                 genres=getattr(target, "genres", []) or [],
             )
-            touch_favorite(url)
+            username, _ = _get_current_user_info()
+            touch_favorite(url, username=username)
             return jsonify(
                 {
                     "title": title,
@@ -1444,7 +1524,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                     "description": getattr(target, "description", ""),
                     "genres": getattr(target, "genres", []),
                     "release_year": getattr(target, "release_year", ""),
-                    "is_favorite": bool(get_favorite(url)),
+                    "is_favorite": bool(get_favorite(url, username=username)),
                     "auto_sync_supported": bool(prov.series_cls),
                 }
             )
@@ -1521,6 +1601,9 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                                 or "",
                                 "title_en": "",
                                 "downloaded": downloaded,
+                                "languages": _episode_language_labels_for_ui(
+                                    episode, allow_provider_lookup=True
+                                ),
                             }
                         ]
                     }
@@ -1595,6 +1678,8 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             except Exception:
                 pass
 
+            allow_episode_language_lookup = prov.name in ("SerienStream", "AniWorld")
+
             episodes_data = []
             for ep in season.episodes:
                 downloaded = (
@@ -1609,6 +1694,10 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                         "title_de": getattr(ep, "title_de", ""),
                         "title_en": getattr(ep, "title_en", ""),
                         "downloaded": downloaded,
+                        "languages": _episode_language_labels_for_ui(
+                            ep,
+                            allow_provider_lookup=allow_episode_language_lookup,
+                        ),
                     }
                 )
             return jsonify({"episodes": episodes_data})
@@ -1702,6 +1791,19 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             username,
             custom_path_id=custom_path_id,
         )
+        _record_user_event(
+            "queue.added",
+            subject_type="download",
+            subject=title,
+            details={
+                "queue_id": queue_id,
+                "series_url": series_url,
+                "episodes": len(episodes),
+                "language": language,
+                "provider": provider,
+                "custom_path_id": custom_path_id,
+            },
+        )
         _emit_ui_event("queue", "dashboard", "nav")
         return jsonify({"queue_id": queue_id})
 
@@ -1715,17 +1817,31 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
     @app.route("/api/queue/<int:queue_id>", methods=["DELETE"])
     def api_queue_remove(queue_id):
+        queue_item = next((item for item in get_queue() if item["id"] == queue_id), None)
         ok, err = remove_from_queue(queue_id)
         if not ok:
             return jsonify({"error": err}), 400
+        _record_user_event(
+            "queue.removed",
+            subject_type="download",
+            subject=(queue_item or {}).get("title") or f"Queue #{queue_id}",
+            details={"queue_id": queue_id},
+        )
         _emit_ui_event("queue", "dashboard", "nav")
         return jsonify({"ok": True})
 
     @app.route("/api/queue/<int:queue_id>/cancel", methods=["POST"])
     def api_queue_cancel(queue_id):
+        queue_item = next((item for item in get_queue() if item["id"] == queue_id), None)
         ok, err = cancel_queue_item(queue_id)
         if not ok:
             return jsonify({"error": err}), 400
+        _record_user_event(
+            "queue.cancelled",
+            subject_type="download",
+            subject=(queue_item or {}).get("title") or f"Queue #{queue_id}",
+            details={"queue_id": queue_id},
+        )
         _emit_ui_event("queue", "dashboard", "nav")
         return jsonify({"ok": True})
 
@@ -1749,6 +1865,16 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         new_id, err = retry_queue_item(queue_id, provider_override=provider_override)
         if err:
             return jsonify({"error": err}), 400
+        _record_user_event(
+            "queue.retried",
+            subject_type="download",
+            subject=(original or {}).get("title") or f"Queue #{queue_id}",
+            details={
+                "from_queue_id": queue_id,
+                "new_queue_id": new_id,
+                "provider": provider_override or (original or {}).get("provider"),
+            },
+        )
         _emit_ui_event("queue", "dashboard", "nav")
         return jsonify(
             {
@@ -1767,12 +1893,23 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             overrides[item["id"]] = _pick_retry_provider(item)
         created = retry_failed_queue_items(provider_overrides=overrides)
         if created:
+            _record_user_event(
+                "queue.retry_failed",
+                subject_type="download",
+                subject="Failed Queue Items",
+                details={"created": created},
+            )
             _emit_ui_event("queue", "dashboard", "nav")
         return jsonify({"ok": True, "created": created})
 
     @app.route("/api/queue/completed", methods=["DELETE"])
     def api_queue_clear():
         clear_completed()
+        _record_user_event(
+            "queue.cleared_finished",
+            subject_type="download",
+            subject="Finished Queue Items",
+        )
         _emit_ui_event("queue", "dashboard", "nav")
         return jsonify({"ok": True})
 
@@ -1849,6 +1986,14 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             env_path=display,
             supported_providers=_ordered_working_providers(),
         )
+
+    @app.route("/provider-health")
+    def provider_health_page():
+        return render_template("provider_health.html")
+
+    @app.route("/audit")
+    def audit_page():
+        return render_template("audit.html")
 
     @app.route("/api/random")
     def api_random():
@@ -1951,7 +2096,9 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
     @app.route("/api/settings", methods=["GET"])
     def api_settings():
-        return jsonify(_settings_payload())
+        username, _ = _get_current_user_info()
+        ui_mode = get_user_preference(username, "ui_mode", "cozy")
+        return jsonify(_settings_payload(ui_mode=ui_mode))
 
     @app.route("/api/settings", methods=["PUT"])
     def api_settings_update():
@@ -1982,6 +2129,32 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             if prov not in WORKING_PROVIDERS:
                 return jsonify({"error": f"Invalid sync_provider: {prov}"}), 400
             os.environ[_ENV_SYNC_PROVIDER] = prov
+        username, _ = _get_current_user_info()
+        if "ui_mode" in data:
+            ui_mode = str(data["ui_mode"]).strip().lower()
+            if ui_mode not in ("compact", "cozy"):
+                return jsonify({"error": f"Invalid ui_mode: {ui_mode}"}), 400
+            set_user_preference(username, "ui_mode", ui_mode)
+        _record_user_event(
+            "settings.updated",
+            subject_type="settings",
+            subject="web-settings",
+            details={
+                key: value
+                for key, value in data.items()
+                if key
+                in {
+                    "download_path",
+                    "lang_separation",
+                    "disable_english_sub",
+                    "experimental_filmpalast",
+                    "sync_schedule",
+                    "sync_language",
+                    "sync_provider",
+                    "ui_mode",
+                }
+            },
+        )
         _emit_ui_event("settings", "autosync", "dashboard", "library", "nav")
         return jsonify({"ok": True})
 
@@ -1998,12 +2171,25 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         if not name or not path:
             return jsonify({"error": "name and path are required"}), 400
         path_id = add_custom_path(name, path)
+        _record_user_event(
+            "custom_path.added",
+            subject_type="custom_path",
+            subject=name,
+            details={"path": path, "path_id": path_id},
+        )
         _emit_ui_event("library", "settings", "autosync")
         return jsonify({"ok": True, "id": path_id})
 
     @app.route("/api/custom-paths/<int:path_id>", methods=["DELETE"])
     def api_custom_paths_delete(path_id):
+        path_row = get_custom_path_by_id(path_id)
         remove_custom_path(path_id)
+        _record_user_event(
+            "custom_path.deleted",
+            subject_type="custom_path",
+            subject=(path_row or {}).get("name") or f"Path #{path_id}",
+            details={"path_id": path_id},
+        )
         _emit_ui_event("library", "settings", "autosync")
         return jsonify({"ok": True})
 
@@ -2035,6 +2221,16 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             else getattr(user, "role", "user")
         )
         return username, role == "admin"
+
+    def _record_user_event(action, subject_type=None, subject=None, details=None):
+        username, _ = _get_current_user_info()
+        record_audit_event(
+            action,
+            username=username,
+            subject_type=subject_type,
+            subject=subject,
+            details=details,
+        )
 
     @app.route("/api/autosync")
     def api_autosync_list():
@@ -2085,6 +2281,17 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             custom_path_id=custom_path_id,
             added_by=username,
         )
+        _record_user_event(
+            "autosync.added",
+            subject_type="autosync",
+            subject=title,
+            details={
+                "job_id": job_id,
+                "series_url": series_url,
+                "language": language,
+                "provider": provider,
+            },
+        )
         _emit_ui_event("autosync", "dashboard", "nav", "settings")
         return jsonify({"ok": True, "id": job_id})
 
@@ -2100,6 +2307,12 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         allowed = {"language", "provider", "enabled", "custom_path_id"}
         filtered = {k: v for k, v in data.items() if k in allowed}
         update_autosync_job(job_id, **filtered)
+        _record_user_event(
+            "autosync.updated",
+            subject_type="autosync",
+            subject=job.get("title") or f"Job #{job_id}",
+            details={"job_id": job_id, **filtered},
+        )
         _emit_ui_event("autosync", "dashboard", "nav", "settings")
         return jsonify({"ok": True})
 
@@ -2114,6 +2327,12 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         ok, err = remove_autosync_job(job_id)
         if not ok:
             return jsonify({"error": err}), 404
+        _record_user_event(
+            "autosync.deleted",
+            subject_type="autosync",
+            subject=job.get("title") or f"Job #{job_id}",
+            details={"job_id": job_id},
+        )
         _emit_ui_event("autosync", "dashboard", "nav", "settings")
         return jsonify({"ok": True})
 
@@ -2129,6 +2348,12 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             if job_id in _syncing_jobs:
                 return jsonify({"error": "Sync already running for this job"}), 409
         threading.Thread(target=_run_autosync_for_job, args=(job,), daemon=True).start()
+        _record_user_event(
+            "autosync.triggered",
+            subject_type="autosync",
+            subject=job.get("title") or f"Job #{job_id}",
+            details={"job_id": job_id},
+        )
         _emit_ui_event("autosync")
         return jsonify({"ok": True, "message": "Sync started"})
 
@@ -2150,6 +2375,12 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             ).start()
             started += 1
         if started:
+            _record_user_event(
+                "autosync.triggered_all",
+                subject_type="autosync",
+                subject="Sync All",
+                details={"started": started},
+            )
             _emit_ui_event("autosync")
         return jsonify({"ok": True, "started": started})
 
@@ -2170,7 +2401,8 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
     @app.route("/api/favorites")
     def api_favorites():
-        return jsonify({"items": list_favorites()})
+        username, _ = _get_current_user_info()
+        return jsonify({"items": list_favorites(username=username)})
 
     @app.route("/api/favorites", methods=["POST"])
     def api_favorites_add():
@@ -2179,13 +2411,26 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         series_url = (data.get("series_url") or "").strip()
         poster_url = (data.get("poster_url") or "").strip() or None
         site = (data.get("site") or "").strip() or None
+        username, _ = _get_current_user_info()
         if not title or not series_url:
             return jsonify({"error": "title and series_url are required"}), 400
-        favorite_id = add_favorite(title, series_url, poster_url=poster_url, site=site)
+        favorite_id = add_favorite(
+            title,
+            series_url,
+            poster_url=poster_url,
+            site=site,
+            username=username,
+        )
         upsert_series_meta(
             series_url=series_url,
             title=title,
             poster_url=poster_url,
+        )
+        _record_user_event(
+            "favorite.added",
+            subject_type="favorite",
+            subject=title,
+            details={"series_url": series_url, "site": site},
         )
         _emit_ui_event("favorites", "dashboard", "nav", "library")
         return jsonify({"ok": True, "id": favorite_id})
@@ -2196,7 +2441,15 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         series_url = (data.get("series_url") or "").strip()
         if not series_url:
             return jsonify({"error": "series_url is required"}), 400
-        remove_favorite(series_url)
+        username, _ = _get_current_user_info()
+        favorite = get_favorite(series_url, username=username)
+        remove_favorite(series_url, username=username)
+        _record_user_event(
+            "favorite.removed",
+            subject_type="favorite",
+            subject=(favorite or {}).get("title") or series_url,
+            details={"series_url": series_url},
+        )
         _emit_ui_event("favorites", "dashboard", "nav", "library")
         return jsonify({"ok": True})
 
@@ -2206,7 +2459,8 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         series_url = (data.get("series_url") or "").strip()
         if not series_url:
             return jsonify({"error": "series_url is required"}), 400
-        touch_favorite(series_url)
+        username, _ = _get_current_user_info()
+        touch_favorite(series_url, username=username)
         _emit_ui_event("favorites", min_interval=5.0)
         return jsonify({"ok": True})
 
@@ -2214,7 +2468,8 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
     @app.route("/api/stats/sync")
     def api_stats_sync():
-        stats = get_sync_stats()
+        username, _ = _get_current_user_info()
+        stats = get_sync_stats(username=username)
         # Compute next_run_at from last check + schedule interval
         schedule_key = os.environ.get("ANIWORLD_SYNC_SCHEDULE", "0")
         interval = SYNC_SCHEDULE_MAP.get(schedule_key, 0)
@@ -2233,24 +2488,34 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
     @app.route("/api/stats/queue")
     def api_stats_queue():
-        return jsonify(get_queue_stats())
+        username, _ = _get_current_user_info()
+        return jsonify(get_queue_stats(username=username))
 
     @app.route("/api/stats/general")
     def api_stats_general():
-        return jsonify(get_general_stats())
+        username, _ = _get_current_user_info()
+        return jsonify(get_general_stats(username=username))
+
+    @app.route("/api/provider-health")
+    def api_provider_health():
+        username, _ = _get_current_user_info()
+        return jsonify({"items": get_provider_health(username=username)})
 
     @app.route("/api/dashboard/stats")
     def api_dashboard_stats():
-        return jsonify(_get_cached_stats_payload())
+        username, _ = _get_current_user_info()
+        return jsonify(_get_cached_stats_payload(username=username))
 
     @app.route("/api/dashboard")
     def api_dashboard():
-        cached = _cache_get("dashboard:full", 4.0)
+        username, _ = _get_current_user_info()
+        cache_key = f"dashboard:full:{_cache_scope_token(username)}"
+        cached = _cache_get(cache_key, 4.0)
         if cached is not None:
             return jsonify(cached)
 
-        stats_payload = _get_cached_stats_payload()
-        favorites = list_favorites()
+        stats_payload = _get_cached_stats_payload(username=username)
+        favorites = list_favorites(username=username)
         meta_by_url = {item["series_url"]: item for item in list_series_meta()}
         for favorite in favorites:
             meta = meta_by_url.get(favorite["series_url"], {})
@@ -2260,15 +2525,16 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         payload = {
             **stats_payload,
             "favorites": favorites[:8],
-            "recent_activity": get_recent_activity(8),
-            "history": get_download_history(14),
+            "recent_activity": get_recent_activity(8, username=username),
+            "history": get_download_history(14, username=username),
             "releases": releases[:10],
         }
-        return jsonify(_cache_set("dashboard:full", payload))
+        return jsonify(_cache_set(cache_key, payload))
 
     @app.route("/api/nav")
     def api_nav():
-        return jsonify(_build_nav_state())
+        username, _ = _get_current_user_info()
+        return jsonify(_build_nav_state(username=username))
 
     @app.route("/api/events")
     def api_events():
@@ -2306,7 +2572,38 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             limit = max(1, min(int(request.args.get("limit", "40")), 100))
         except ValueError:
             limit = 40
-        return jsonify({"items": get_download_history(limit)})
+        username, _ = _get_current_user_info()
+        return jsonify({"items": get_download_history(limit, username=username)})
+
+    @app.route("/api/audit")
+    def api_audit():
+        try:
+            limit = max(1, min(int(request.args.get("limit", "80")), 200))
+        except ValueError:
+            limit = 80
+        requested_user = (request.args.get("username") or "").strip()
+        action = (request.args.get("action") or "").strip() or None
+        current_username, is_admin = _get_current_user_info()
+        if is_admin:
+            scope_username = requested_user or None
+        else:
+            scope_username = current_username
+        return jsonify(
+            {
+                "items": list_audit_events(
+                    limit=limit,
+                    username=scope_username,
+                    action=action,
+                )
+            }
+        )
+
+    @app.route("/api/audit/users")
+    def api_audit_users():
+        _, is_admin = _get_current_user_info()
+        if not is_admin:
+            return jsonify({"items": []})
+        return jsonify({"items": list_audit_users()})
 
     @app.route("/api/library")
     def api_library():

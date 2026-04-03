@@ -303,9 +303,13 @@ function renderQueue(items) {
         errors.forEach(function (err) {
           var ep = err.url ? parseSeasonEpisode(err.url) : "";
           var label = ep ? ep + ": " : "";
+          var providersTried =
+            Array.isArray(err.providers_tried) && err.providers_tried.length
+              ? " Providers tried: " + err.providers_tried.join(", ")
+              : "";
           details +=
             '<div class="queue-error-detail">' +
-            escQ(label + (err.error || "")) +
+            escQ(label + (err.error || "") + providersTried) +
             "</div>";
         });
         errorsHtml =

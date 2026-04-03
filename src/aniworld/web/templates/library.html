@@ -22,7 +22,19 @@
     <select id="libraryLanguageFilter">
       <option value="">All Languages</option>
     </select>
+    <select id="librarySortFilter">
+      <option value="name-asc">Name A-Z</option>
+      <option value="size-desc">Largest First</option>
+      <option value="episodes-desc">Most Episodes</option>
+    </select>
+    <select id="libraryIssueFilter">
+      <option value="">All Titles</option>
+      <option value="missing">Only Missing Episodes</option>
+      <option value="duplicates">Only Duplicates</option>
+      <option value="healthy">Only Clean Titles</option>
+    </select>
   </div>
+  <div id="librarySummary" class="library-summary-grid"></div>
   <div id="libraryList" class="library-list page-panel"></div>
 </div>
 {% endblock %}
