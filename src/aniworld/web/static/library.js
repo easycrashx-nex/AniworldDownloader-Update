@@ -210,6 +210,7 @@ function buildTitleInsights(title) {
   var duplicateCount = 0;
   var seasonCount = 0;
   var sourceMissingCount = 0;
+  var localMissing = [];
   var compare = title.compare || null;
 
   Object.keys(title.seasons || {}).forEach(function (seasonKey) {
@@ -239,7 +240,17 @@ function buildTitleInsights(title) {
     });
     for (var i = 1; i < uniqueNumbers.length; i += 1) {
       var gap = uniqueNumbers[i] - uniqueNumbers[i - 1] - 1;
-      if (gap > 0) missingCount += gap;
+      if (gap > 0) {
+        missingCount += gap;
+        for (var missingEpisode = uniqueNumbers[i - 1] + 1; missingEpisode < uniqueNumbers[i]; missingEpisode += 1) {
+          localMissing.push(
+            "S" +
+              String(seasonKey).padStart(2, "0") +
+              "E" +
+              String(missingEpisode).padStart(3, "0"),
+          );
+        }
+      }
     }
   });
 
@@ -249,6 +260,7 @@ function buildTitleInsights(title) {
 
   return {
     missingCount: missingCount,
+    localMissing: localMissing,
     duplicateCount: duplicateCount,
     sourceMissingCount: sourceMissingCount,
     seasonCount: seasonCount,
@@ -709,17 +721,33 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
         title.compare.missing_sample.length
           ? " Missing: " + title.compare.missing_sample.slice(0, 3).join(", ")
           : "";
+      var localMissingList =
+        title.insights && Array.isArray(title.insights.localMissing)
+          ? title.insights.localMissing
+          : [];
+      var sourceMissingList =
+        title.compare && Array.isArray(title.compare.missing)
+          ? title.compare.missing
+          : [];
       if (title.insights.missingCount > 0) {
         html.push(
           '<span class="library-title-insight-warning">' +
             title.insights.missingCount +
             " episode gaps detected</span>",
         );
-      } else if (title.insights.sourceMissingCount > 0) {
-        const missingList =
-          title.compare && Array.isArray(title.compare.missing)
-            ? title.compare.missing
-            : [];
+        if (localMissingList.length) {
+          html.push('<div class="library-missing-wrap">');
+          html.push('<div class="library-missing-list">');
+          localMissingList.forEach(function (label) {
+            html.push(
+              '<span class="library-missing-chip">' + escLib(label) + "</span>",
+            );
+          });
+          html.push("</div>");
+          html.push("</div>");
+        }
+      }
+      if (title.insights.sourceMissingCount > 0) {
         html.push(
           '<span class="library-title-insight-warning">' +
             title.insights.sourceMissingCount +
@@ -727,10 +755,10 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
             escLib(comparePreview) +
             "</span>",
         );
-        if (missingList.length) {
+        if (sourceMissingList.length) {
           html.push('<div class="library-missing-wrap">');
           html.push('<div class="library-missing-list">');
-          missingList.forEach(function (label) {
+          sourceMissingList.forEach(function (label) {
             html.push(
               '<span class="library-missing-chip">' + escLib(label) + "</span>",
             );
@@ -741,18 +769,27 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
               'data-series-url="' + escLib(title.series_url || "") + '" ' +
               'data-title="' + escLib(title.folder || "") + '" ' +
               'data-language-folder="' + escLib(langFolder || "") + '" ' +
-              'data-missing=\'' + escLib(JSON.stringify(missingList)) + '\' ' +
+              'data-missing=\'' + escLib(JSON.stringify(sourceMissingList)) + '\' ' +
               'onclick="event.stopPropagation();queueMissingLibraryEpisodesFromButton(this)">Queue Missing</button>',
           );
           html.push("</div>");
         }
-      } else if (title.insights.duplicateCount > 0) {
+      }
+      if (
+        title.insights.missingCount === 0 &&
+        title.insights.sourceMissingCount === 0 &&
+        title.insights.duplicateCount > 0
+      ) {
         html.push(
           '<span class="library-title-insight-warning">' +
             title.insights.duplicateCount +
             " duplicates detected</span>",
         );
-      } else {
+      } else if (
+        title.insights.missingCount === 0 &&
+        title.insights.sourceMissingCount === 0 &&
+        title.insights.duplicateCount === 0
+      ) {
         html.push(
           title.compare && title.compare.available
             ? "<span>Source compare is clean</span>"
