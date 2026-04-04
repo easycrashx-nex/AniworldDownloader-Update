@@ -849,6 +849,8 @@ _ui_event_condition = threading.Condition(_ui_event_lock)
 _ui_event_last_emit = {}
 _runtime_cache = {}
 _runtime_cache_lock = threading.Lock()
+_runtime_cache_warmer_started = False
+_runtime_cache_warmer_lock = threading.Lock()
 
 
 def _cache_get(key, ttl_seconds):
@@ -880,6 +882,57 @@ def _cache_invalidate(*prefixes):
         for key in list(_runtime_cache.keys()):
             if any(key.startswith(prefix) for prefix in prefixes):
                 _runtime_cache.pop(key, None)
+
+
+def _warm_runtime_caches_once():
+    """Populate the heaviest runtime caches in the background."""
+    try:
+        _get_cached_library_snapshot(include_meta=False)
+    except Exception as exc:
+        logger.warning("Warmup for lightweight library snapshot failed: %s", exc)
+
+    try:
+        _get_cached_library_snapshot(include_meta=True)
+    except Exception as exc:
+        logger.warning("Warmup for library snapshot failed: %s", exc)
+
+    try:
+        _get_cached_library_compare(refresh=True)
+    except Exception as exc:
+        logger.warning("Warmup for library compare failed: %s", exc)
+
+
+def _warm_runtime_caches_startup():
+    """Do a startup warmup so the first library/stats view is fast."""
+    started_at = time.monotonic()
+    logger.info("Starting cache warmup for library/stats surfaces")
+    _warm_runtime_caches_once()
+    logger.info(
+        "Finished cache warmup for library/stats surfaces in %.1fs",
+        time.monotonic() - started_at,
+    )
+
+
+def _ensure_runtime_cache_warmer():
+    global _runtime_cache_warmer_started
+    with _runtime_cache_warmer_lock:
+        if _runtime_cache_warmer_started:
+            return
+        _runtime_cache_warmer_started = True
+
+    def _worker():
+        try:
+            interval = int(os.environ.get("ANIWORLD_CACHE_WARM_INTERVAL", "180"))
+        except ValueError:
+            interval = 180
+        interval = max(60, min(interval, 1800))
+
+        # Warm once right after startup, then refresh periodically.
+        while True:
+            _warm_runtime_caches_once()
+            time.sleep(interval)
+
+    threading.Thread(target=_worker, daemon=True, name="aniworld-cache-warmer").start()
 
 
 def _emit_ui_event(*channels, min_interval=0.75):
@@ -1242,7 +1295,7 @@ def _build_nav_state(username=None):
 
 def _get_cached_library_snapshot(include_meta=True):
     cache_key = f"library:{1 if include_meta else 0}"
-    cached = _cache_get(cache_key, 8.0)
+    cached = _cache_get(cache_key, 300.0)
     if cached is not None:
         return cached
     snapshot = _scan_library_snapshot(include_meta=include_meta)
@@ -1429,7 +1482,7 @@ def _get_cached_library_compare(refresh=False):
     cache_key = "library:compare"
     if refresh:
         _cache_invalidate(cache_key)
-    cached = _cache_get(cache_key, 120.0)
+    cached = _cache_get(cache_key, 300.0)
     if cached is not None:
         return cached
 
@@ -1478,19 +1531,32 @@ def _get_cached_library_compare(refresh=False):
 
 def _get_cached_stats_payload(username=None):
     cache_key = f"stats:summary:{_cache_scope_token(username)}"
-    cached = _cache_get(cache_key, 4.0)
+    cached = _cache_get(cache_key, 45.0)
     if cached is not None:
         return cached
 
     general = get_general_stats(username=username)
     queue = get_queue_stats(username=username)
     sync = get_sync_stats(username=username)
-    storage_snapshot = _get_cached_library_snapshot(include_meta=True)
+    try:
+        storage_snapshot = _get_cached_library_snapshot(include_meta=True)
+        storage_summary = storage_snapshot.get("summary", {})
+    except Exception as exc:
+        logger.warning("Stats storage snapshot failed: %s", exc)
+        storage_summary = {
+            "titles": 0,
+            "episodes": 0,
+            "total_size": 0,
+            "by_location": [],
+            "by_language": [],
+            "available": False,
+            "error": str(exc),
+        }
     payload = {
         "general": general,
         "queue": queue,
         "sync": sync,
-        "storage": storage_snapshot["summary"],
+        "storage": storage_summary,
         "provider_quality": get_provider_quality(username=username),
         "activity_chart": get_activity_chart(7, username=username),
     }
@@ -3609,7 +3675,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     def api_dashboard():
         username, _ = _get_current_user_info()
         cache_key = f"dashboard:full:{_cache_scope_token(username)}"
-        cached = _cache_get(cache_key, 4.0)
+        cached = _cache_get(cache_key, 30.0)
         if cached is not None:
             return jsonify(cached)
 
@@ -3884,6 +3950,9 @@ def start_web_ui(
     )
     app.config["WEB_HOST"] = host
     app.config["WEB_PORT"] = port
+    if os.getenv("ANIWORLD_CACHE_WARM_ON_START", "1") == "1":
+        _warm_runtime_caches_startup()
+    _ensure_runtime_cache_warmer()
     display_host = "localhost" if host == "127.0.0.1" else host
     url = f"http://{display_host}:{port}"
     print(f"Starting AniWorld Web UI on {url}")

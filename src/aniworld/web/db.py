@@ -353,6 +353,27 @@ def init_queue_db():
             conn.execute("ALTER TABLE download_queue ADD COLUMN captcha_url TEXT")
         except Exception:
             pass  # column already exists
+        # Add archive columns for existing DBs created before the archive schema grew.
+        try:
+            conn.execute("ALTER TABLE download_archive ADD COLUMN username TEXT")
+        except Exception:
+            pass  # column already exists
+        try:
+            conn.execute(
+                "ALTER TABLE download_archive ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"
+            )
+        except Exception:
+            pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE download_archive ADD COLUMN custom_path_id INTEGER")
+        except Exception:
+            pass  # column already exists
+        try:
+            conn.execute(
+                "ALTER TABLE download_archive ADD COLUMN errors TEXT NOT NULL DEFAULT '[]'"
+            )
+        except Exception:
+            pass  # column already exists
         _archive_terminal_downloads(conn)
         conn.commit()
     finally:
