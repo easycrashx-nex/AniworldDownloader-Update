@@ -125,6 +125,96 @@
   </div>
 
   <div class="settings-section">
+    <h2>Browser Notifications</h2>
+    <div class="settings-info-card">
+      <span class="field-label">Browser Permission</span>
+      <div class="settings-inline-actions">
+        <span id="browserNotificationStatus" class="settings-chip"
+          >Checking browser...</span
+        >
+        <button
+          type="button"
+          class="btn-secondary"
+          id="browserNotificationPermissionBtn"
+          onclick="requestBrowserNotificationPermission()"
+        >
+          Enable in Browser
+        </button>
+      </div>
+      <div class="settings-hint">
+        Desktop notifications work while the web UI is open in your browser.
+        Because the service worker was intentionally removed, this is not a
+        background push system for fully closed tabs.
+      </div>
+    </div>
+
+    <label class="settings-checkbox">
+      <input
+        type="checkbox"
+        id="browserNotificationsEnabled"
+        onchange="saveBrowserNotificationToggles()"
+      />
+      Enable browser notifications
+    </label>
+
+    <div class="settings-hint">
+      Turn desktop notifications on or off for this account. Category toggles
+      below decide which areas are allowed to raise a browser notification.
+    </div>
+
+    <div class="settings-checkbox-grid">
+      <label class="settings-checkbox">
+        <input
+          type="checkbox"
+          id="browserNotifyBrowse"
+          onchange="saveBrowserNotificationToggles()"
+        />
+        Browse notifications
+      </label>
+      <label class="settings-checkbox">
+        <input
+          type="checkbox"
+          id="browserNotifyQueue"
+          onchange="saveBrowserNotificationToggles()"
+        />
+        Queue notifications
+      </label>
+      <label class="settings-checkbox">
+        <input
+          type="checkbox"
+          id="browserNotifyAutosync"
+          onchange="saveBrowserNotificationToggles()"
+        />
+        Auto-Sync notifications
+      </label>
+      <label class="settings-checkbox">
+        <input
+          type="checkbox"
+          id="browserNotifyLibrary"
+          onchange="saveBrowserNotificationToggles()"
+        />
+        Library notifications
+      </label>
+      <label class="settings-checkbox">
+        <input
+          type="checkbox"
+          id="browserNotifySettings"
+          onchange="saveBrowserNotificationToggles()"
+        />
+        Settings notifications
+      </label>
+      <label class="settings-checkbox">
+        <input
+          type="checkbox"
+          id="browserNotifySystem"
+          onchange="saveBrowserNotificationToggles()"
+        />
+        System & general notifications
+      </label>
+    </div>
+  </div>
+
+  <div class="settings-section">
     <h2>UI Settings</h2>
     <div class="settings-row" style="gap: 10px; flex-wrap: wrap">
       <div class="settings-field">

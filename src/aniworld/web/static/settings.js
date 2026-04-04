@@ -20,6 +20,25 @@ const serverPortValue = document.getElementById("serverPort");
 const serverScopeValue = document.getElementById("serverScope");
 const serverIpsWrap = document.getElementById("serverIps");
 const serverAccessUrlsWrap = document.getElementById("serverAccessUrls");
+const browserNotificationsEnabledCb = document.getElementById(
+  "browserNotificationsEnabled",
+);
+const browserNotifyBrowseCb = document.getElementById("browserNotifyBrowse");
+const browserNotifyQueueCb = document.getElementById("browserNotifyQueue");
+const browserNotifyAutosyncCb = document.getElementById(
+  "browserNotifyAutosync",
+);
+const browserNotifyLibraryCb = document.getElementById("browserNotifyLibrary");
+const browserNotifySettingsCb = document.getElementById(
+  "browserNotifySettings",
+);
+const browserNotifySystemCb = document.getElementById("browserNotifySystem");
+const browserNotificationStatus = document.getElementById(
+  "browserNotificationStatus",
+);
+const browserNotificationPermissionBtn = document.getElementById(
+  "browserNotificationPermissionBtn",
+);
 const searchDefaultSortSelect = document.getElementById("searchDefaultSort");
 const searchDefaultGenresInput = document.getElementById(
   "searchDefaultGenres",
@@ -92,6 +111,81 @@ function renderSettingsChipList(container, values) {
   });
 }
 
+function browserNotificationsSupported() {
+  return typeof window !== "undefined" && "Notification" in window;
+}
+
+function updateBrowserNotificationCategoryState() {
+  const enabled = !!browserNotificationsEnabledCb?.checked;
+  [
+    browserNotifyBrowseCb,
+    browserNotifyQueueCb,
+    browserNotifyAutosyncCb,
+    browserNotifyLibraryCb,
+    browserNotifySettingsCb,
+    browserNotifySystemCb,
+  ].forEach((checkbox) => {
+    if (!checkbox) return;
+    checkbox.disabled = !enabled;
+  });
+}
+
+function renderBrowserNotificationPermissionState() {
+  if (!browserNotificationStatus || !browserNotificationPermissionBtn) return;
+
+  if (!browserNotificationsSupported()) {
+    browserNotificationStatus.textContent = "Unsupported";
+    browserNotificationPermissionBtn.disabled = true;
+    browserNotificationPermissionBtn.textContent = "Not Available";
+    return;
+  }
+
+  const permission = Notification.permission;
+  if (permission === "granted") {
+    browserNotificationStatus.textContent = "Granted";
+    browserNotificationPermissionBtn.disabled = true;
+    browserNotificationPermissionBtn.textContent = "Enabled";
+    return;
+  }
+  if (permission === "denied") {
+    browserNotificationStatus.textContent = "Blocked";
+    browserNotificationPermissionBtn.disabled = false;
+    browserNotificationPermissionBtn.textContent = "Open Browser Settings";
+    return;
+  }
+
+  browserNotificationStatus.textContent = "Ask in Browser";
+  browserNotificationPermissionBtn.disabled = false;
+  browserNotificationPermissionBtn.textContent = "Enable in Browser";
+}
+
+function applyBrowserNotificationPrefsClient(data) {
+  if (browserNotificationsEnabledCb) {
+    browserNotificationsEnabledCb.checked =
+      data.browser_notifications_enabled === "1";
+  }
+  if (browserNotifyBrowseCb) {
+    browserNotifyBrowseCb.checked = data.browser_notify_browse !== "0";
+  }
+  if (browserNotifyQueueCb) {
+    browserNotifyQueueCb.checked = data.browser_notify_queue !== "0";
+  }
+  if (browserNotifyAutosyncCb) {
+    browserNotifyAutosyncCb.checked = data.browser_notify_autosync !== "0";
+  }
+  if (browserNotifyLibraryCb) {
+    browserNotifyLibraryCb.checked = data.browser_notify_library !== "0";
+  }
+  if (browserNotifySettingsCb) {
+    browserNotifySettingsCb.checked = data.browser_notify_settings !== "0";
+  }
+  if (browserNotifySystemCb) {
+    browserNotifySystemCb.checked = data.browser_notify_system !== "0";
+  }
+  updateBrowserNotificationCategoryState();
+  renderBrowserNotificationPermissionState();
+}
+
 async function loadSettings() {
   if (settingsRequest) return settingsRequest;
   settingsRequest = (async () => {
@@ -132,6 +226,7 @@ async function loadSettings() {
       }
       renderSettingsChipList(serverIpsWrap, data.server_ips || []);
       renderSettingsChipList(serverAccessUrlsWrap, data.server_access_urls || []);
+      applyBrowserNotificationPrefsClient(data);
       if (searchDefaultSortSelect) {
         searchDefaultSortSelect.value = data.search_default_sort || "source";
       }
@@ -172,6 +267,55 @@ async function loadSettings() {
     }
   })();
   return settingsRequest;
+}
+
+async function saveBrowserNotificationToggles() {
+  try {
+    const payload = {
+      browser_notifications_enabled:
+        browserNotificationsEnabledCb?.checked || false,
+      browser_notify_browse: browserNotifyBrowseCb?.checked || false,
+      browser_notify_queue: browserNotifyQueueCb?.checked || false,
+      browser_notify_autosync: browserNotifyAutosyncCb?.checked || false,
+      browser_notify_library: browserNotifyLibraryCb?.checked || false,
+      browser_notify_settings: browserNotifySettingsCb?.checked || false,
+      browser_notify_system: browserNotifySystemCb?.checked || false,
+    };
+    await updateSettings(payload);
+    updateBrowserNotificationCategoryState();
+    if (typeof window.applyBrowserNotificationPrefs === "function") {
+      window.applyBrowserNotificationPrefs(payload);
+    }
+    showToast("Browser notification settings saved");
+  } catch (e) {
+    showToast("Failed to save browser notifications: " + e.message);
+  }
+}
+
+async function requestBrowserNotificationPermission() {
+  if (!browserNotificationsSupported()) {
+    showToast("Browser notifications are not supported here");
+    renderBrowserNotificationPermissionState();
+    return;
+  }
+  if (Notification.permission === "denied") {
+    showToast("Browser notifications are blocked in your browser settings");
+    renderBrowserNotificationPermissionState();
+    return;
+  }
+  try {
+    const result = await Notification.requestPermission();
+    renderBrowserNotificationPermissionState();
+    if (result === "granted") {
+      showToast("Browser notification permission granted");
+    } else if (result === "denied") {
+      showToast("Browser notification permission was blocked");
+    } else {
+      showToast("Browser notification permission was dismissed");
+    }
+  } catch (e) {
+    showToast("Failed to request browser notification permission");
+  }
 }
 
 async function saveLangSeparation() {
@@ -418,6 +562,8 @@ async function saveDownloadPath() {
 }
 
 loadSettings();
+renderBrowserNotificationPermissionState();
+window.addEventListener("focus", renderBrowserNotificationPermissionState);
 
 async function saveSyncSchedule() {
   if (!syncScheduleSelect) return;

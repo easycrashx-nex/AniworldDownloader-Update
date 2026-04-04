@@ -374,6 +374,13 @@ def _settings_payload(
     search_default_year_to="",
     search_default_favorites_only="0",
     search_default_downloaded_only="0",
+    browser_notifications_enabled="0",
+    browser_notify_browse="1",
+    browser_notify_queue="1",
+    browser_notify_autosync="1",
+    browser_notify_library="1",
+    browser_notify_settings="1",
+    browser_notify_system="1",
 ):
     return {
         "download_path": _resolved_download_path_value(),
@@ -413,6 +420,15 @@ def _settings_payload(
         "search_default_downloaded_only": _normalize_pref_bool(
             search_default_downloaded_only
         ),
+        "browser_notifications_enabled": _normalize_pref_bool(
+            browser_notifications_enabled
+        ),
+        "browser_notify_browse": _normalize_pref_bool(browser_notify_browse),
+        "browser_notify_queue": _normalize_pref_bool(browser_notify_queue),
+        "browser_notify_autosync": _normalize_pref_bool(browser_notify_autosync),
+        "browser_notify_library": _normalize_pref_bool(browser_notify_library),
+        "browser_notify_settings": _normalize_pref_bool(browser_notify_settings),
+        "browser_notify_system": _normalize_pref_bool(browser_notify_system),
     }
 
 
@@ -2901,6 +2917,27 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         search_default_downloaded_only = get_user_preference(
             username, "search_default_downloaded_only", "0"
         )
+        browser_notifications_enabled = get_user_preference(
+            username, "browser_notifications_enabled", "0"
+        )
+        browser_notify_browse = get_user_preference(
+            username, "browser_notify_browse", "1"
+        )
+        browser_notify_queue = get_user_preference(
+            username, "browser_notify_queue", "1"
+        )
+        browser_notify_autosync = get_user_preference(
+            username, "browser_notify_autosync", "1"
+        )
+        browser_notify_library = get_user_preference(
+            username, "browser_notify_library", "1"
+        )
+        browser_notify_settings = get_user_preference(
+            username, "browser_notify_settings", "1"
+        )
+        browser_notify_system = get_user_preference(
+            username, "browser_notify_system", "1"
+        )
         payload = _settings_payload(
             ui_mode=ui_mode,
             ui_scale=ui_scale,
@@ -2918,6 +2955,13 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             search_default_year_to=search_default_year_to,
             search_default_favorites_only=search_default_favorites_only,
             search_default_downloaded_only=search_default_downloaded_only,
+            browser_notifications_enabled=browser_notifications_enabled,
+            browser_notify_browse=browser_notify_browse,
+            browser_notify_queue=browser_notify_queue,
+            browser_notify_autosync=browser_notify_autosync,
+            browser_notify_library=browser_notify_library,
+            browser_notify_settings=browser_notify_settings,
+            browser_notify_system=browser_notify_system,
         )
         payload.update(_server_network_info(app))
         return jsonify(payload)
@@ -3035,6 +3079,48 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 "search_default_downloaded_only",
                 _normalize_pref_bool(data["search_default_downloaded_only"]),
             )
+        if "browser_notifications_enabled" in data:
+            set_user_preference(
+                username,
+                "browser_notifications_enabled",
+                _normalize_pref_bool(data["browser_notifications_enabled"]),
+            )
+        if "browser_notify_browse" in data:
+            set_user_preference(
+                username,
+                "browser_notify_browse",
+                _normalize_pref_bool(data["browser_notify_browse"]),
+            )
+        if "browser_notify_queue" in data:
+            set_user_preference(
+                username,
+                "browser_notify_queue",
+                _normalize_pref_bool(data["browser_notify_queue"]),
+            )
+        if "browser_notify_autosync" in data:
+            set_user_preference(
+                username,
+                "browser_notify_autosync",
+                _normalize_pref_bool(data["browser_notify_autosync"]),
+            )
+        if "browser_notify_library" in data:
+            set_user_preference(
+                username,
+                "browser_notify_library",
+                _normalize_pref_bool(data["browser_notify_library"]),
+            )
+        if "browser_notify_settings" in data:
+            set_user_preference(
+                username,
+                "browser_notify_settings",
+                _normalize_pref_bool(data["browser_notify_settings"]),
+            )
+        if "browser_notify_system" in data:
+            set_user_preference(
+                username,
+                "browser_notify_system",
+                _normalize_pref_bool(data["browser_notify_system"]),
+            )
         _record_user_event(
             "settings.updated",
             subject_type="settings",
@@ -3067,6 +3153,13 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                     "search_default_year_to",
                     "search_default_favorites_only",
                     "search_default_downloaded_only",
+                    "browser_notifications_enabled",
+                    "browser_notify_browse",
+                    "browser_notify_queue",
+                    "browser_notify_autosync",
+                    "browser_notify_library",
+                    "browser_notify_settings",
+                    "browser_notify_system",
                 }
             },
         )

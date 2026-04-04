@@ -1520,11 +1520,11 @@ def get_download_history(limit=40, username=None):
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT id, title, series_url, language, provider, status, total_episodes, "
+            "SELECT queue_id AS id, title, series_url, language, provider, status, total_episodes, "
             "source, created_at, completed_at, username, custom_path_id, errors "
-            "FROM download_queue "
-            "WHERE COALESCE(username, '') = ? AND status IN ('completed', 'failed', 'cancelled') "
-            "ORDER BY COALESCE(completed_at, created_at) DESC, id DESC LIMIT ?",
+            "FROM download_archive "
+            "WHERE COALESCE(username, '') = ? "
+            "ORDER BY COALESCE(completed_at, created_at) DESC, queue_id DESC LIMIT ?",
             (scope_username, limit),
         ).fetchall()
         return [dict(r) for r in rows]

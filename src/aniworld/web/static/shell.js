@@ -16,6 +16,15 @@
   let toastTimer = null;
   let notifications = [];
   const notificationScope = document.body.dataset.currentUser || "__anon__";
+  let browserNotificationPrefs = {
+    enabled: false,
+    browse: true,
+    queue: true,
+    autosync: true,
+    library: true,
+    settings: true,
+    system: true,
+  };
 
   function notificationStorageKey() {
     return "aniworld:notifications:" + notificationScope;
@@ -39,6 +48,87 @@
     const diffHours = Math.round(diffMinutes / 60);
     if (diffHours < 24) return diffHours + "h ago";
     return date.toLocaleDateString();
+  }
+
+  function browserNotificationsSupported() {
+    return typeof window !== "undefined" && "Notification" in window;
+  }
+
+  function normalizePrefEnabled(value, fallback) {
+    if (typeof value === "boolean") return value;
+    if (value == null) return fallback;
+    return String(value).trim() === "1" || String(value).trim().toLowerCase() === "true";
+  }
+
+  function applyBrowserNotificationPrefs(data = {}) {
+    browserNotificationPrefs = {
+      enabled: normalizePrefEnabled(
+        data.browser_notifications_enabled,
+        browserNotificationPrefs.enabled,
+      ),
+      browse: normalizePrefEnabled(
+        data.browser_notify_browse,
+        browserNotificationPrefs.browse,
+      ),
+      queue: normalizePrefEnabled(
+        data.browser_notify_queue,
+        browserNotificationPrefs.queue,
+      ),
+      autosync: normalizePrefEnabled(
+        data.browser_notify_autosync,
+        browserNotificationPrefs.autosync,
+      ),
+      library: normalizePrefEnabled(
+        data.browser_notify_library,
+        browserNotificationPrefs.library,
+      ),
+      settings: normalizePrefEnabled(
+        data.browser_notify_settings,
+        browserNotificationPrefs.settings,
+      ),
+      system: normalizePrefEnabled(
+        data.browser_notify_system,
+        browserNotificationPrefs.system,
+      ),
+    };
+  }
+
+  function notificationCategoryForSource(source) {
+    const normalized = String(source || "System").trim().toLowerCase();
+    if (normalized === "browse") return "browse";
+    if (normalized === "queue") return "queue";
+    if (normalized === "auto-sync" || normalized === "autosync") return "autosync";
+    if (normalized === "library") return "library";
+    if (normalized === "settings") return "settings";
+    return "system";
+  }
+
+  function desktopNotificationsAllowed(source) {
+    if (!browserNotificationsSupported()) return false;
+    if (!browserNotificationPrefs.enabled) return false;
+    if (Notification.permission !== "granted") return false;
+    return !!browserNotificationPrefs[notificationCategoryForSource(source)];
+  }
+
+  function sendBrowserNotification(entry) {
+    if (!entry || !desktopNotificationsAllowed(entry.source)) return;
+    try {
+      const source = String(entry.source || "System");
+      const notification = new Notification("AniWorld Downloader", {
+        body: source + ": " + String(entry.message || ""),
+        tag: "aniworld-" + notificationCategoryForSource(source),
+      });
+      notification.onclick = function () {
+        try {
+          window.focus();
+        } catch (e) {
+          /* ignore */
+        }
+        notification.close();
+      };
+    } catch (e) {
+      /* ignore */
+    }
   }
 
   function saveNotifications() {
@@ -133,11 +223,13 @@
 
     const previous = notifications[0];
     const now = Date.now();
+    const source = options.source || "System";
     const isDuplicate =
       previous &&
       previous.message === cleanMessage &&
-      previous.source === (options.source || "App") &&
+      previous.source === source &&
       now - new Date(previous.createdAt).getTime() < 4000;
+    let notificationEntry = null;
 
     if (isDuplicate) {
       notifications[0] = Object.assign({}, previous, {
@@ -145,19 +237,23 @@
         read: false,
       });
     } else {
-      notifications.unshift({
+      notificationEntry = {
         id: String(now) + "-" + Math.random().toString(16).slice(2, 8),
         message: cleanMessage,
         level: options.level || "info",
-        source: options.source || "App",
+        source: source,
         createdAt: new Date(now).toISOString(),
         read: false,
-      });
+      };
+      notifications.unshift(notificationEntry);
       notifications = notifications.slice(0, 30);
     }
 
     saveNotifications();
     renderNotifications();
+    if (notificationEntry && options.desktop !== false) {
+      sendBrowserNotification(notificationEntry);
+    }
   }
 
   function showGlobalToast(message, options = {}) {
@@ -336,6 +432,7 @@
         applyUiBackground(
           data.ui_background || document.body.dataset.uiBackground,
         );
+        applyBrowserNotificationPrefs(data);
       } catch (e) {
         /* ignore */
       } finally {
@@ -431,6 +528,7 @@
   window.applyUiNavSize = applyUiNavSize;
   window.applyUiTableDensity = applyUiTableDensity;
   window.applyUiBackground = applyUiBackground;
+  window.applyBrowserNotificationPrefs = applyBrowserNotificationPrefs;
   window.AniworldNotifications = {
     add: addNotification,
     clear: clearNotifications,

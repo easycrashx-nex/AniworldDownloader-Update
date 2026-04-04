@@ -318,11 +318,20 @@ function formatBytes(bytes) {
   return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function parseServerDate(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const iso = raw.includes("T") ? raw : raw.replace(" ", "T");
+  const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(iso) ? iso : `${iso}Z`;
+  const dt = new Date(normalized);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
 function formatStatDate(value) {
   if (!value) return "Never";
-  const iso = value.replace(" ", "T");
-  const dt = new Date(iso);
-  if (Number.isNaN(dt.getTime())) return value;
+  const dt = parseServerDate(value);
+  if (!dt) return value;
   return dt.toLocaleString();
 }
 
@@ -339,8 +348,8 @@ function formatDuration(seconds) {
 
 function formatShortDate(value) {
   if (!value) return "Never";
-  const dt = new Date(value.replace(" ", "T"));
-  if (Number.isNaN(dt.getTime())) return value;
+  const dt = parseServerDate(value);
+  if (!dt) return value;
   return dt.toLocaleDateString(undefined, {
     day: "2-digit",
     month: "short",
@@ -349,15 +358,15 @@ function formatShortDate(value) {
 
 function formatRelativeDate(value) {
   if (!value) return "Just now";
-  const dt = new Date(value.replace(" ", "T"));
-  if (Number.isNaN(dt.getTime())) return value;
-  const diffMs = Date.now() - dt.getTime();
-  const diffMin = Math.round(diffMs / 60000);
+  const dt = parseServerDate(value);
+  if (!dt) return value;
+  const diffMs = Math.max(0, Date.now() - dt.getTime());
+  const diffMin = Math.floor(diffMs / 60000);
   if (diffMin < 1) return "Just now";
   if (diffMin < 60) return `${diffMin} min ago`;
-  const diffHours = Math.round(diffMin / 60);
+  const diffHours = Math.floor(diffMin / 60);
   if (diffHours < 24) return `${diffHours} h ago`;
-  const diffDays = Math.round(diffHours / 24);
+  const diffDays = Math.floor(diffHours / 24);
   return `${diffDays} d ago`;
 }
 

@@ -700,3 +700,17 @@ function closeCaptchaModal() {
     }
   }, 60000);
 })();
+
+function showToast(msg) {
+  if (
+    window.AniworldNotifications &&
+    typeof window.AniworldNotifications.add === "function"
+  ) {
+    window.AniworldNotifications.add(msg, { source: "Queue" });
+  }
+  const t = document.getElementById("toast");
+  if (!t) return;
+  t.textContent = msg;
+  t.style.display = "block";
+  setTimeout(() => (t.style.display = "none"), 4000);
+}

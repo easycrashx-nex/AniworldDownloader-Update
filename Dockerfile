@@ -41,7 +41,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 # Default download directory used by the application
-ENV ANIWORLD_DOWNLOAD_PATH=/app/Downloads
+ENV ANIWORLD_DOWNLOAD_PATH=/app/Downloads \
+    ANIWORLD_WEB_PORT=8080 \
+    ANIWORLD_WEB_EXPOSE=1 \
+    ANIWORLD_WEB_NO_BROWSER=1 \
+    ANIWORLD_WEB_THREADS=16
 
 # Virtual display for headless Chromium (patchright) — headed mode works via Xvfb
 ENV DISPLAY=:99
@@ -55,6 +59,7 @@ RUN pip install --no-cache-dir --upgrade pip
 
 # Copy the application source code
 COPY src/ /app/src/
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 
 # Install the project into the image
 RUN pip install --no-cache-dir .
@@ -63,13 +68,18 @@ RUN pip install --no-cache-dir .
 RUN python -m patchright install chromium
 
 # Ensure the runtime directories are still writable after COPY overwrote ownership
-RUN chown -R aniworld:aniworld /app/Downloads /home/aniworld/.aniworld
+RUN chmod +x /app/docker-entrypoint.sh \
+    && chown -R aniworld:aniworld /app /app/Downloads /home/aniworld/.aniworld
 
 # Drop privileges for runtime
 USER aniworld
 
+VOLUME ["/app/Downloads", "/home/aniworld/.aniworld"]
+
 # Expose the web UI port
 EXPOSE 8080
 
-# Start Xvfb virtual display on :99, then launch the web UI
-CMD Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & sleep 1 && exec aniworld --web-ui --web-expose --no-browser --web-port 8080
+HEALTHCHECK --interval=30s --timeout=8s --start-period=20s --retries=3 CMD python -c "import os,sys,urllib.request; port=os.getenv('ANIWORLD_WEB_PORT', '8080'); urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=5); sys.exit(0)"
+
+# Start Xvfb and launch the web UI with Docker-friendly env-based defaults.
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

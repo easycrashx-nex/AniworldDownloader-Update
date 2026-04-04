@@ -2,8 +2,9 @@ services:
   aniworld:
     container_name: aniworld-downloader
     build: .
+    init: true
     ports:
-      - "8080:8080"
+      - "${ANIWORLD_WEB_PORT:-8080}:${ANIWORLD_WEB_PORT:-8080}"
     volumes:
       # Persist downloads on the host so they survive container recreation.
       - ./Downloads:/app/Downloads
@@ -13,30 +14,51 @@ services:
     # NOTE: Create ./Downloads before running: mkdir -p Downloads
     # Docker creates missing bind-mount directories as root, causing permission errors.
 
-    # environment:
-    # --- General settings (uncomment the environment block to customise) ---
-    #   ANIWORLD_LANGUAGE: "German Dub"               # Default language (German Dub | English Sub | German Sub | English Dub)
-    #   ANIWORLD_PROVIDER: "VOE"                      # Default streaming provider
-    #   ANIWORLD_NAMING_TEMPLATE: "{title} ({year}) [imdbid-{imdbid}]/Season {season}/{title} S{season}E{episode}.mkv"
-    #   ANIWORLD_VIDEO_CODEC: "copy"                  # Video codec: copy | h264 | h265 | av1
-    #   ANIWORLD_LANG_SEPARATION: "0"                 # Separate downloads into language subfolders (german-dub/, english-sub/)
-    #   ANIWORLD_DISABLE_ENGLISH_SUB: "0"             # Block English Sub downloads entirely
-    #   ANIWORLD_DEBUG_MODE: "0"                      # Enable debug logging
+    environment:
+      # --- Web / container defaults tuned for the custom web UI ---
+      ANIWORLD_WEB_PORT: "${ANIWORLD_WEB_PORT:-8080}"
+      ANIWORLD_WEB_EXPOSE: "${ANIWORLD_WEB_EXPOSE:-1}"
+      ANIWORLD_WEB_NO_BROWSER: "${ANIWORLD_WEB_NO_BROWSER:-1}"
+      ANIWORLD_WEB_THREADS: "${ANIWORLD_WEB_THREADS:-16}"
+      ANIWORLD_WEB_AUTH: "${ANIWORLD_WEB_AUTH:-1}"
+      ANIWORLD_EXPERIMENTAL_FILMPALAST: "${ANIWORLD_EXPERIMENTAL_FILMPALAST:-0}"
 
-    # --- Authentication (uncomment the environment block to enable) ---
-    #   ANIWORLD_WEB_AUTH: "1"                        # Enable local username/password login
-    #   ANIWORLD_WEB_ADMIN_USER: ""                   # Auto-create admin on first run (skip setup page)
-    #   ANIWORLD_WEB_ADMIN_PASS: ""                   # Password for auto-created admin
-    #   ANIWORLD_WEB_SSO: "1"                         # Enable OIDC SSO login button
-    #   ANIWORLD_WEB_FORCE_SSO: "1"                   # SSO-only mode (no local accounts)
-    #   # OIDC / SSO provider settings (required when SSO is enabled)
-    #   ANIWORLD_OIDC_ISSUER_URL: "https://keycloak.example.com/realms/myrealm"
-    #   ANIWORLD_OIDC_CLIENT_ID: "aniworld"
-    #   ANIWORLD_OIDC_CLIENT_SECRET: "secret"
-    #   ANIWORLD_OIDC_DISPLAY_NAME: "SSO"             # Label shown on login button
-    #   ANIWORLD_OIDC_ADMIN_USER: ""                  # SSO username auto-promoted to admin
-    #   ANIWORLD_OIDC_ADMIN_SUBJECT: ""               # OIDC subject claim for auto-admin (preferred over username)
-    #   ANIWORLD_WEB_BASE_URL: "https://aniworld.example.com"  # External URL for redirects
+      # --- General settings ---
+      # ANIWORLD_LANGUAGE: "German Dub"               # Default language (German Dub | English Sub | German Sub | English Dub)
+      # ANIWORLD_PROVIDER: "VOE"                      # Default streaming provider
+      # ANIWORLD_NAMING_TEMPLATE: "{title} ({year}) [imdbid-{imdbid}]/Season {season}/{title} S{season}E{episode}.mkv"
+      # ANIWORLD_VIDEO_CODEC: "copy"                  # Video codec: copy | h264 | h265 | av1
+      # ANIWORLD_LANG_SEPARATION: "0"                 # Separate downloads into language subfolders (german-dub/, english-sub/)
+      # ANIWORLD_DISABLE_ENGLISH_SUB: "0"             # Block English Sub downloads entirely
+      # ANIWORLD_DEBUG_MODE: "0"                      # Enable debug logging
+
+      # --- Authentication / accounts ---
+      # ANIWORLD_WEB_ADMIN_USER: ""                   # Auto-create admin on first run (skip setup page)
+      # ANIWORLD_WEB_ADMIN_PASS: ""                   # Password for auto-created admin
+      # ANIWORLD_WEB_SSO: "1"                         # Enable OIDC SSO login button
+      # ANIWORLD_WEB_FORCE_SSO: "1"                   # SSO-only mode (no local accounts)
+      # ANIWORLD_OIDC_ISSUER_URL: "https://keycloak.example.com/realms/myrealm"
+      # ANIWORLD_OIDC_CLIENT_ID: "aniworld"
+      # ANIWORLD_OIDC_CLIENT_SECRET: "secret"
+      # ANIWORLD_OIDC_DISPLAY_NAME: "SSO"             # Label shown on login button
+      # ANIWORLD_OIDC_ADMIN_USER: ""                  # SSO username auto-promoted to admin
+      # ANIWORLD_OIDC_ADMIN_SUBJECT: ""               # OIDC subject claim for auto-admin (preferred over username)
+      # ANIWORLD_WEB_BASE_URL: "https://aniworld.example.com"  # External URL for redirects
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,sys,urllib.request; port=os.getenv('ANIWORLD_WEB_PORT','8080'); urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=5); sys.exit(0)",
+        ]
+      interval: 30s
+      timeout: 8s
+      start_period: 20s
+      retries: 3
+
+    stop_grace_period: 20s
 
     restart: unless-stopped
 
