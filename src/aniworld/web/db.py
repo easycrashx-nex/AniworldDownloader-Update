@@ -291,6 +291,25 @@ CREATE TABLE IF NOT EXISTS download_archive (
 );
 """
 
+_CREATE_DOWNLOAD_STATS_ARCHIVE_TABLE = """\
+CREATE TABLE IF NOT EXISTS download_stats_archive (
+    queue_id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    series_url TEXT NOT NULL,
+    total_episodes INTEGER NOT NULL,
+    language TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    username TEXT,
+    status TEXT NOT NULL
+        CHECK(status IN ('completed','failed','cancelled')),
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    custom_path_id INTEGER,
+    errors TEXT NOT NULL DEFAULT '[]'
+);
+"""
+
 _CREATE_DOWNLOAD_ARCHIVE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_download_archive_completed_at "
     "ON download_archive (completed_at DESC)",
@@ -298,6 +317,15 @@ _CREATE_DOWNLOAD_ARCHIVE_INDEXES = (
     "ON download_archive (status)",
     "CREATE INDEX IF NOT EXISTS idx_download_archive_provider "
     "ON download_archive (provider)",
+)
+
+_CREATE_DOWNLOAD_STATS_ARCHIVE_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_download_stats_archive_completed_at "
+    "ON download_stats_archive (completed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_download_stats_archive_status "
+    "ON download_stats_archive (status)",
+    "CREATE INDEX IF NOT EXISTS idx_download_stats_archive_provider "
+    "ON download_stats_archive (provider)",
 )
 
 
@@ -317,6 +345,20 @@ def _archive_terminal_downloads(conn, queue_id=None):
         query += " AND id = ?"
         params = (queue_id,)
     conn.execute(query, params)
+    conn.execute(query.replace("download_archive", "download_stats_archive", 1), params)
+
+
+def _backfill_stats_archive(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO download_stats_archive ("
+        "queue_id, title, series_url, total_episodes, language, provider, username, "
+        "status, source, created_at, completed_at, custom_path_id, errors"
+        ") "
+        "SELECT queue_id, title, series_url, total_episodes, language, provider, username, "
+        "status, COALESCE(source, 'manual'), created_at, completed_at, custom_path_id, "
+        "COALESCE(errors, '[]') "
+        "FROM download_archive"
+    )
 
 
 def init_queue_db():
@@ -325,7 +367,10 @@ def init_queue_db():
     try:
         conn.execute(_CREATE_QUEUE_TABLE)
         conn.execute(_CREATE_DOWNLOAD_ARCHIVE_TABLE)
+        conn.execute(_CREATE_DOWNLOAD_STATS_ARCHIVE_TABLE)
         for stmt in _CREATE_DOWNLOAD_ARCHIVE_INDEXES:
+            conn.execute(stmt)
+        for stmt in _CREATE_DOWNLOAD_STATS_ARCHIVE_INDEXES:
             conn.execute(stmt)
         # Add position column for queue reordering (migration for existing DBs)
         try:
@@ -374,6 +419,29 @@ def init_queue_db():
             )
         except Exception:
             pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE download_stats_archive ADD COLUMN username TEXT")
+        except Exception:
+            pass  # column already exists
+        try:
+            conn.execute(
+                "ALTER TABLE download_stats_archive ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"
+            )
+        except Exception:
+            pass  # column already exists
+        try:
+            conn.execute(
+                "ALTER TABLE download_stats_archive ADD COLUMN custom_path_id INTEGER"
+            )
+        except Exception:
+            pass  # column already exists
+        try:
+            conn.execute(
+                "ALTER TABLE download_stats_archive ADD COLUMN errors TEXT NOT NULL DEFAULT '[]'"
+            )
+        except Exception:
+            pass  # column already exists
+        _backfill_stats_archive(conn)
         _archive_terminal_downloads(conn)
         conn.commit()
     finally:
@@ -1406,36 +1474,28 @@ def get_search_suggestions(site, query="", limit=8, username=None):
 
 
 def get_sync_stats(username=None):
-    scope_username = _scope_username(username)
     conn = get_db()
     try:
-        where_clause = "WHERE COALESCE(added_by, '') = ?"
-        total = conn.execute(
-            f"SELECT COUNT(*) AS cnt FROM autosync_jobs {where_clause}",
-            (scope_username,),
-        ).fetchone()["cnt"]
+        total = conn.execute("SELECT COUNT(*) AS cnt FROM autosync_jobs").fetchone()[
+            "cnt"
+        ]
         enabled = conn.execute(
-            f"SELECT COUNT(*) AS cnt FROM autosync_jobs {where_clause} AND enabled = 1",
-            (scope_username,),
+            "SELECT COUNT(*) AS cnt FROM autosync_jobs WHERE enabled = 1"
         ).fetchone()["cnt"]
         disabled = total - enabled
         last_check = conn.execute(
-            f"SELECT MAX(last_check) AS lc FROM autosync_jobs {where_clause}",
-            (scope_username,),
+            "SELECT MAX(last_check) AS lc FROM autosync_jobs"
         ).fetchone()["lc"]
         last_new = conn.execute(
-            f"SELECT MAX(last_new_found) AS ln FROM autosync_jobs {where_clause}",
-            (scope_username,),
+            "SELECT MAX(last_new_found) AS ln FROM autosync_jobs"
         ).fetchone()["ln"]
         total_eps = conn.execute(
-            f"SELECT COALESCE(SUM(episodes_found), 0) AS s FROM autosync_jobs {where_clause}",
-            (scope_username,),
+            "SELECT COALESCE(SUM(episodes_found), 0) AS s FROM autosync_jobs"
         ).fetchone()["s"]
         jobs = conn.execute(
             "SELECT id, title, series_url, language, provider, enabled, "
             "last_check, last_new_found, episodes_found, added_by, created_at "
-            f"FROM autosync_jobs {where_clause} ORDER BY id",
-            (scope_username,),
+            "FROM autosync_jobs ORDER BY id",
         ).fetchall()
         return {
             "total_jobs": total,
@@ -1451,24 +1511,19 @@ def get_sync_stats(username=None):
 
 
 def get_queue_stats(username=None):
-    scope_username = _scope_username(username)
     conn = get_db()
     try:
-        where_clause = "WHERE COALESCE(username, '') = ?"
-        total = conn.execute(
-            f"SELECT COUNT(*) AS cnt FROM download_queue {where_clause}",
-            (scope_username,),
-        ).fetchone()["cnt"]
+        total = conn.execute("SELECT COUNT(*) AS cnt FROM download_queue").fetchone()[
+            "cnt"
+        ]
         by_status = {}
         for row in conn.execute(
-            f"SELECT status, COUNT(*) AS cnt FROM download_queue {where_clause} GROUP BY status",
-            (scope_username,),
+            "SELECT status, COUNT(*) AS cnt FROM download_queue GROUP BY status",
         ).fetchall():
             by_status[row["status"]] = row["cnt"]
         running = conn.execute(
             "SELECT title, current_episode, total_episodes FROM download_queue "
-            f"{where_clause} AND status = 'running' LIMIT 1",
-            (scope_username,),
+            "WHERE status = 'running' LIMIT 1",
         ).fetchone()
         return {
             "total": total,
@@ -1480,74 +1535,61 @@ def get_queue_stats(username=None):
 
 
 def get_general_stats(username=None):
-    scope_username = _scope_username(username)
     conn = get_db()
     try:
         total_downloads = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status IN ('completed', 'failed')",
-            (scope_username,),
+            "SELECT COUNT(*) AS cnt FROM download_stats_archive "
+            "WHERE status IN ('completed', 'failed')",
         ).fetchone()["cnt"]
         completed = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status = 'completed'",
-            (scope_username,),
+            "SELECT COUNT(*) AS cnt FROM download_stats_archive "
+            "WHERE status = 'completed'",
         ).fetchone()["cnt"]
         failed = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status = 'failed'",
-            (scope_username,),
+            "SELECT COUNT(*) AS cnt FROM download_stats_archive "
+            "WHERE status = 'failed'",
         ).fetchone()["cnt"]
         total_episodes = conn.execute(
-            "SELECT COALESCE(SUM(total_episodes), 0) AS s FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status = 'completed'",
-            (scope_username,),
+            "SELECT COALESCE(SUM(total_episodes), 0) AS s FROM download_stats_archive "
+            "WHERE status = 'completed'",
         ).fetchone()["s"]
         last_24h = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status = 'completed' "
-            "AND completed_at >= datetime('now', '-1 day')"
-            ,
-            (scope_username,),
+            "SELECT COUNT(*) AS cnt FROM download_stats_archive "
+            "WHERE status = 'completed' "
+            "AND completed_at >= datetime('now', '-1 day')",
         ).fetchone()["cnt"]
         # Average duration (completed items with both timestamps)
         avg_dur = conn.execute(
             "SELECT AVG("
             "  (julianday(completed_at) - julianday(created_at)) * 86400"
-            ") AS avg_s FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status = 'completed' AND completed_at IS NOT NULL",
-            (scope_username,),
+            ") AS avg_s FROM download_stats_archive "
+            "WHERE status = 'completed' AND completed_at IS NOT NULL",
         ).fetchone()["avg_s"]
         avg_eps = conn.execute(
-            "SELECT AVG(total_episodes) AS avg_eps FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status = 'completed'",
-            (scope_username,),
+            "SELECT AVG(total_episodes) AS avg_eps FROM download_stats_archive "
+            "WHERE status = 'completed'",
         ).fetchone()["avg_eps"]
         # Most downloaded titles
         top_titles = conn.execute(
-            "SELECT title, COUNT(*) AS cnt FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status = 'completed' "
+            "SELECT title, COUNT(*) AS cnt FROM download_stats_archive "
+            "WHERE status = 'completed' "
             "GROUP BY title ORDER BY cnt DESC LIMIT 10",
-            (scope_username,),
         ).fetchall()
         # Episodes per language
         by_language = conn.execute(
             "SELECT language, COUNT(*) AS cnt, "
             "COALESCE(SUM(total_episodes), 0) AS eps "
-            "FROM download_archive WHERE COALESCE(username, '') = ? AND status = 'completed' "
+            "FROM download_stats_archive WHERE status = 'completed' "
             "GROUP BY language ORDER BY cnt DESC",
-            (scope_username,),
         ).fetchall()
         # Anime vs Series (heuristic: aniworld.to = anime, s.to = series)
         anime_count = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status = 'completed' AND series_url LIKE '%aniworld.to%'",
-            (scope_username,),
+            "SELECT COUNT(*) AS cnt FROM download_stats_archive "
+            "WHERE status = 'completed' AND series_url LIKE '%aniworld.to%'",
         ).fetchone()["cnt"]
         series_count = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status = 'completed' AND series_url LIKE '%s.to%'",
-            (scope_username,),
+            "SELECT COUNT(*) AS cnt FROM download_stats_archive "
+            "WHERE status = 'completed' AND series_url LIKE '%s.to%'",
         ).fetchone()["cnt"]
         return {
             "total_downloads": total_downloads,
@@ -1609,7 +1651,6 @@ def get_download_history(limit=40, username=None):
 
 
 def get_provider_quality(username=None):
-    scope_username = _scope_username(username)
     conn = get_db()
     try:
         rows = conn.execute(
@@ -1618,10 +1659,8 @@ def get_provider_quality(username=None):
             "SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, "
             "SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled, "
             "COALESCE(SUM(CASE WHEN status = 'completed' THEN total_episodes ELSE 0 END), 0) AS episodes "
-            "FROM download_archive "
-            "WHERE COALESCE(username, '') = ? "
+            "FROM download_stats_archive "
             "GROUP BY provider ORDER BY completed DESC, failed ASC, provider ASC",
-            (scope_username,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -1629,7 +1668,6 @@ def get_provider_quality(username=None):
 
 
 def get_provider_health(username=None):
-    scope_username = _scope_username(username)
     conn = get_db()
     try:
         archive_rows = conn.execute(
@@ -1641,19 +1679,15 @@ def get_provider_health(username=None):
             "MAX(CASE WHEN status = 'completed' THEN completed_at END) AS last_success_at, "
             "MAX(CASE WHEN status = 'failed' THEN completed_at END) AS last_failure_at, "
             "SUM(CASE WHEN status = 'failed' AND completed_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) AS failed_24h "
-            "FROM download_archive "
-            "WHERE COALESCE(username, '') = ? "
+            "FROM download_stats_archive "
             "GROUP BY provider",
-            (scope_username,),
         ).fetchall()
         queue_rows = conn.execute(
             "SELECT provider, "
             "SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running, "
             "SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued "
             "FROM download_queue "
-            "WHERE COALESCE(username, '') = ? "
             "GROUP BY provider",
-            (scope_username,),
         ).fetchall()
 
         items = {}
@@ -1750,7 +1784,6 @@ def get_provider_health(username=None):
 def get_activity_chart(days=7, username=None):
     from datetime import datetime, timedelta
 
-    scope_username = _scope_username(username)
     conn = get_db()
     try:
         since = (datetime.utcnow() - timedelta(days=max(days - 1, 0))).strftime(
@@ -1758,10 +1791,10 @@ def get_activity_chart(days=7, username=None):
         )
         rows = conn.execute(
             "SELECT substr(completed_at, 1, 10) AS day, COUNT(*) AS completed "
-            "FROM download_archive "
-            "WHERE COALESCE(username, '') = ? AND status = 'completed' AND completed_at >= ? "
+            "FROM download_stats_archive "
+            "WHERE status = 'completed' AND completed_at >= ? "
             "GROUP BY substr(completed_at, 1, 10)",
-            (scope_username, since),
+            (since,),
         ).fetchall()
         row_map = {r["day"]: r["completed"] for r in rows}
         result = []

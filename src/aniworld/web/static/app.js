@@ -1671,12 +1671,35 @@ async function deleteHistoryItem(id) {
 async function retryFailedFromDashboard() {
   if (typeof retryFailedQueueItems === "function") {
     await retryFailedQueueItems();
+    return;
+  }
+  try {
+    const resp = await fetch("/api/queue/retry-failed", { method: "POST" });
+    const data = await resp.json();
+    showToast(
+      data.created
+        ? "Re-queued " + data.created + " failed item(s)"
+        : "No failed items to retry",
+    );
+    loadDashboardStats();
+    if (isTimelinePage) loadTimelinePage();
+  } catch (e) {
+    showToast("Retry failed");
   }
 }
 
 async function clearFinishedFromDashboard() {
   if (typeof clearFinishedQueueItems === "function") {
     await clearFinishedQueueItems();
+    return;
+  }
+  try {
+    await fetch("/api/queue/completed", { method: "DELETE" });
+    showToast("Finished items cleared");
+    loadDashboardStats();
+    if (isTimelinePage) loadTimelinePage();
+  } catch (e) {
+    showToast("Failed to clear finished items");
   }
 }
 

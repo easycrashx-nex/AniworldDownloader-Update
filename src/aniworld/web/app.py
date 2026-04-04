@@ -1645,14 +1645,14 @@ def _resolve_missing_episode_urls(series_url, missing_labels):
 
 
 def _get_cached_stats_payload(username=None):
-    cache_key = f"stats:summary:{_cache_scope_token(username)}"
+    cache_key = "stats:summary:global"
     cached = _cache_get(cache_key, 45.0)
     if cached is not None:
         return cached
 
-    general = get_general_stats(username=username)
-    queue = get_queue_stats(username=username)
-    sync = get_sync_stats(username=username)
+    general = get_general_stats()
+    queue = get_queue_stats()
+    sync = get_sync_stats()
     try:
         storage_snapshot = _get_cached_library_snapshot(include_meta=True)
         storage_summary = storage_snapshot.get("summary", {})
@@ -1672,8 +1672,8 @@ def _get_cached_stats_payload(username=None):
         "queue": queue,
         "sync": sync,
         "storage": storage_summary,
-        "provider_quality": get_provider_quality(username=username),
-        "activity_chart": get_activity_chart(7, username=username),
+        "provider_quality": get_provider_quality(),
+        "activity_chart": get_activity_chart(7),
     }
     return _cache_set(cache_key, payload)
 
@@ -3748,8 +3748,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
     @app.route("/api/stats/sync")
     def api_stats_sync():
-        username, _ = _get_current_user_info()
-        stats = get_sync_stats(username=username)
+        stats = get_sync_stats()
         # Compute next_run_at from last check + schedule interval
         schedule_key = os.environ.get("ANIWORLD_SYNC_SCHEDULE", "0")
         interval = SYNC_SCHEDULE_MAP.get(schedule_key, 0)
@@ -3768,23 +3767,19 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
     @app.route("/api/stats/queue")
     def api_stats_queue():
-        username, _ = _get_current_user_info()
-        return jsonify(get_queue_stats(username=username))
+        return jsonify(get_queue_stats())
 
     @app.route("/api/stats/general")
     def api_stats_general():
-        username, _ = _get_current_user_info()
-        return jsonify(get_general_stats(username=username))
+        return jsonify(get_general_stats())
 
     @app.route("/api/provider-health")
     def api_provider_health():
-        username, _ = _get_current_user_info()
-        return jsonify({"items": get_provider_health(username=username)})
+        return jsonify({"items": get_provider_health()})
 
     @app.route("/api/dashboard/stats")
     def api_dashboard_stats():
-        username, _ = _get_current_user_info()
-        return jsonify(_get_cached_stats_payload(username=username))
+        return jsonify(_get_cached_stats_payload())
 
     @app.route("/api/dashboard")
     def api_dashboard():
@@ -3794,7 +3789,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         if cached is not None:
             return jsonify(cached)
 
-        stats_payload = _get_cached_stats_payload(username=username)
+        stats_payload = _get_cached_stats_payload()
         favorites = list_favorites(username=username)
         meta_by_url = {item["series_url"]: item for item in list_series_meta()}
         for favorite in favorites:
