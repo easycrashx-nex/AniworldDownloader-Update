@@ -7,10 +7,12 @@ import socket
 import threading
 import time
 from collections import deque
+from io import BytesIO
 
 from flask import (
     Flask,
     Response,
+    send_file,
     jsonify,
     redirect,
     render_template,
@@ -36,6 +38,7 @@ from ..search import (
 )
 from ..search import query as aniworld_query
 from .db import (
+    DB_PATH,
     add_autosync_job,
     add_custom_path,
     add_favorite,
@@ -44,6 +47,7 @@ from .db import (
     clear_completed,
     delete_completed_queue_item,
     delete_download_history_item,
+    export_app_state,
     find_autosync_by_url,
     get_activity_chart,
     get_autosync_job,
@@ -55,6 +59,7 @@ from .db import (
     get_general_stats,
     get_provider_quality,
     get_provider_health,
+    get_provider_score_history,
     get_search_suggestions,
     get_user_preference,
     get_recent_activity,
@@ -72,6 +77,7 @@ from .db import (
     init_custom_paths_db,
     init_favorites_db,
     init_audit_log_db,
+    init_provider_score_history_db,
     init_queue_db,
     init_search_history_db,
     init_series_meta_db,
@@ -91,12 +97,16 @@ from .db import (
     set_captcha_url,
     clear_captcha_url,
     set_user_preference,
+    snapshot_provider_score_history,
     set_queue_status,
+    touch_series_last_downloaded,
+    touch_series_last_synced,
     touch_favorite,
     upsert_series_meta,
     update_autosync_job,
     update_queue_errors,
     update_queue_progress,
+    import_app_state,
 )
 
 logger = get_logger(__name__)
@@ -108,6 +118,11 @@ _ENV_SYNC_SCHEDULE = "ANIWORLD_SYNC_SCHEDULE"
 _ENV_SYNC_LANGUAGE = "ANIWORLD_SYNC_LANGUAGE"
 _ENV_SYNC_PROVIDER = "ANIWORLD_SYNC_PROVIDER"
 _ENV_EXPERIMENTAL_FILMPALAST = "ANIWORLD_EXPERIMENTAL_FILMPALAST"
+_ENV_BANDWIDTH_LIMIT = "ANIWORLD_BANDWIDTH_LIMIT_KBPS"
+_ENV_PROVIDER_FALLBACK_ORDER = "ANIWORLD_PROVIDER_FALLBACK_ORDER"
+_ENV_DISK_WARN_GB = "ANIWORLD_DISK_WARN_GB"
+_ENV_DISK_WARN_PERCENT = "ANIWORLD_DISK_WARN_PERCENT"
+_ENV_LIBRARY_AUTO_REPAIR = "ANIWORLD_LIBRARY_AUTO_REPAIR"
 
 
 def _experimental_flags():
@@ -195,11 +210,11 @@ def _disk_guard_snapshot():
     from pathlib import Path
 
     try:
-        warn_gb = float(os.environ.get("ANIWORLD_DISK_WARN_GB", "10"))
+        warn_gb = float(os.environ.get(_ENV_DISK_WARN_GB, "10"))
     except ValueError:
         warn_gb = 10.0
     try:
-        warn_pct = float(os.environ.get("ANIWORLD_DISK_WARN_PERCENT", "12"))
+        warn_pct = float(os.environ.get(_ENV_DISK_WARN_PERCENT, "12"))
     except ValueError:
         warn_pct = 12.0
 
@@ -264,6 +279,104 @@ def _disk_guard_snapshot():
         "warn_free_percent": warn_pct,
         "paths": items,
     }
+
+
+_UI_THEME_PRESETS = {
+    "custom": None,
+    "control": {
+        "ui_mode": "compact",
+        "ui_theme": "ocean",
+        "ui_radius": "structured",
+        "ui_motion": "fast",
+        "ui_width": "wide",
+        "ui_modal_width": "compact",
+        "ui_nav_size": "compact",
+        "ui_table_density": "compact",
+        "ui_background": "grid",
+    },
+    "cinematic": {
+        "ui_mode": "airy",
+        "ui_theme": "sunset",
+        "ui_radius": "round",
+        "ui_motion": "slow",
+        "ui_width": "wide",
+        "ui_modal_width": "wide",
+        "ui_nav_size": "large",
+        "ui_table_density": "relaxed",
+        "ui_background": "cinematic",
+    },
+    "frosted": {
+        "ui_mode": "cozy",
+        "ui_theme": "arctic",
+        "ui_radius": "soft",
+        "ui_motion": "normal",
+        "ui_width": "standard",
+        "ui_modal_width": "standard",
+        "ui_nav_size": "standard",
+        "ui_table_density": "standard",
+        "ui_background": "frost",
+    },
+    "neon": {
+        "ui_mode": "tight",
+        "ui_theme": "electric",
+        "ui_radius": "soft",
+        "ui_motion": "fast",
+        "ui_width": "wide",
+        "ui_modal_width": "standard",
+        "ui_nav_size": "compact",
+        "ui_table_density": "compact",
+        "ui_background": "pulse",
+    },
+}
+
+
+def _normalize_bandwidth_limit(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return "0"
+    try:
+        parsed = int(float(raw))
+    except (TypeError, ValueError):
+        return "0"
+    return str(max(0, min(parsed, 250000)))
+
+
+def _normalize_provider_fallback_order(value):
+    entries = []
+    seen = set()
+    for raw in str(value or "").split(","):
+        provider = str(raw or "").strip()
+        if not provider:
+            continue
+        lowered = provider.lower()
+        match = next(
+            (name for name in WORKING_PROVIDERS if name.lower() == lowered),
+            None,
+        )
+        if not match or match in seen:
+            continue
+        seen.add(match)
+        entries.append(match)
+    return ", ".join(entries)
+
+
+def _normalize_disk_guard_threshold(value, fallback, upper_bound):
+    raw = str(value or "").strip()
+    if not raw:
+        return fallback
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return fallback
+    parsed = max(0.0, min(parsed, upper_bound))
+    if parsed.is_integer():
+        return str(int(parsed))
+    return f"{parsed:.1f}".rstrip("0").rstrip(".")
+
+
+def _normalize_ui_preset(value):
+    preset = str(value or "custom").strip().lower()
+    return preset if preset in _UI_THEME_PRESETS else "custom"
 
 
 def _normalize_ui_scale(value):
@@ -435,6 +548,7 @@ def _normalize_search_default_year(value):
 
 
 def _settings_payload(
+    ui_preset="custom",
     ui_mode="cozy",
     ui_scale="100",
     ui_theme="ocean",
@@ -469,6 +583,22 @@ def _settings_payload(
         "sync_schedule": os.environ.get(_ENV_SYNC_SCHEDULE, "0"),
         "sync_language": os.environ.get(_ENV_SYNC_LANGUAGE, "German Dub"),
         "sync_provider": os.environ.get(_ENV_SYNC_PROVIDER, "VOE"),
+        "bandwidth_limit_kbps": _normalize_bandwidth_limit(
+            os.environ.get(_ENV_BANDWIDTH_LIMIT, "0")
+        ),
+        "provider_fallback_order": _normalize_provider_fallback_order(
+            os.environ.get(_ENV_PROVIDER_FALLBACK_ORDER, "")
+        ),
+        "disk_warn_gb": _normalize_disk_guard_threshold(
+            os.environ.get(_ENV_DISK_WARN_GB, "10"), "10", 5000
+        ),
+        "disk_warn_percent": _normalize_disk_guard_threshold(
+            os.environ.get(_ENV_DISK_WARN_PERCENT, "12"), "12", 100
+        ),
+        "library_auto_repair": _normalize_pref_bool(
+            os.environ.get(_ENV_LIBRARY_AUTO_REPAIR, "0")
+        ),
+        "ui_preset": _normalize_ui_preset(ui_preset),
         "ui_mode": _normalize_ui_mode(ui_mode),
         "ui_scale": _normalize_ui_scale(ui_scale),
         "ui_theme": _normalize_ui_theme(ui_theme),
@@ -638,7 +768,14 @@ def _fetch_and_cache_series_meta(series_url):
 def _build_series_reference_index():
     references = {}
 
-    def _store(title, series_url, poster_url=None, site=None):
+    def _store(
+        title,
+        series_url,
+        poster_url=None,
+        site=None,
+        last_downloaded_at=None,
+        last_synced_at=None,
+    ):
         if not title or not series_url:
             return
         key = _normalize_title_key(title)
@@ -650,6 +787,8 @@ def _build_series_reference_index():
             "series_url": series_url,
             "poster_url": poster_url,
             "site": site,
+            "last_downloaded_at": last_downloaded_at,
+            "last_synced_at": last_synced_at,
         }
         if not current or (poster_url and not current.get("poster_url")):
             references[key] = candidate
@@ -662,6 +801,8 @@ def _build_series_reference_index():
             favorite["series_url"],
             favorite.get("poster_url") or meta.get("poster_url"),
             favorite.get("site"),
+            meta.get("last_downloaded_at"),
+            meta.get("last_synced_at"),
         )
     for ref in get_recent_series_references():
         meta = meta_by_url.get(ref["series_url"], {})
@@ -671,6 +812,8 @@ def _build_series_reference_index():
             ref["series_url"],
             meta.get("poster_url"),
             site,
+            meta.get("last_downloaded_at"),
+            meta.get("last_synced_at"),
         )
     return references
 
@@ -729,12 +872,16 @@ def _scan_library_snapshot(include_meta=True):
             entry["series_url"] = None
             entry["poster_url"] = None
             entry["site"] = None
+            entry["last_downloaded_at"] = None
+            entry["last_synced_at"] = None
             return entry
 
         ref = _find_series_reference(entry["folder"], references)
         entry["series_url"] = ref["series_url"] if ref else None
         entry["poster_url"] = ref.get("poster_url") if ref else None
         entry["site"] = ref.get("site") if ref else None
+        entry["last_downloaded_at"] = ref.get("last_downloaded_at") if ref else None
+        entry["last_synced_at"] = ref.get("last_synced_at") if ref else None
 
         if entry["series_url"] and not entry["poster_url"] and fetched_meta < fetch_limit:
             meta = _fetch_and_cache_series_meta(entry["series_url"])
@@ -1015,6 +1162,53 @@ def _ensure_runtime_cache_warmer():
     threading.Thread(target=_worker, daemon=True, name="aniworld-cache-warmer").start()
 
 
+def _diagnostics_cache_snapshot():
+    now = time.time()
+    with _runtime_cache_lock:
+        entries = [
+            {
+                "key": key,
+                "age_seconds": round(now - float(value.get("at") or now), 1),
+            }
+            for key, value in _runtime_cache.items()
+        ]
+    entries.sort(key=lambda item: (item["age_seconds"], item["key"]))
+    return {
+        "entries": entries[:24],
+        "count": len(entries),
+        "warmer_started": _runtime_cache_warmer_started,
+    }
+
+
+def _build_diagnostics_payload():
+    try:
+        db_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    except OSError:
+        db_size = 0
+    return {
+        "server": _server_network_info(app),
+        "cache": _diagnostics_cache_snapshot(),
+        "queue": get_queue_stats(),
+        "sync": get_sync_stats(),
+        "disk_guard": _disk_guard_snapshot(),
+        "provider_health": get_provider_health()[:6],
+        "provider_history_hours": 168,
+        "database": {
+            "path": str(DB_PATH),
+            "size_bytes": db_size,
+            "size_mb": round(db_size / (1024 * 1024), 2) if db_size else 0,
+        },
+        "downloads": {
+            "bandwidth_limit_kbps": _normalize_bandwidth_limit(
+                os.environ.get(_ENV_BANDWIDTH_LIMIT, "0")
+            ),
+            "fallback_order": _provider_fallback_order(),
+            "library_auto_repair": os.environ.get(_ENV_LIBRARY_AUTO_REPAIR, "0")
+            == "1",
+        },
+    }
+
+
 def _emit_ui_event(*channels, min_interval=0.75):
     normalized = tuple(sorted({ch for ch in channels if ch}))
     if not normalized:
@@ -1102,10 +1296,21 @@ def _episode_language_labels_for_ui(episode, allow_provider_lookup=False):
     return labels
 
 
+def _provider_fallback_order():
+    custom = _normalize_provider_fallback_order(
+        os.environ.get(_ENV_PROVIDER_FALLBACK_ORDER, "")
+    )
+    return [value.strip() for value in custom.split(",") if value.strip()]
+
+
 def _rank_provider_candidates(candidates, preferred=None, exclude=None):
     quality_rows = {row["provider"]: row for row in get_provider_quality()}
     ordered = list(dict.fromkeys([name for name in candidates if name and name != exclude]))
     position_map = {name: index for index, name in enumerate(ordered)}
+    fallback_order = _provider_fallback_order()
+    fallback_position = {
+        name: fallback_order.index(name) for name in fallback_order if name in ordered
+    }
 
     def _score(name):
         row = quality_rows.get(name, {})
@@ -1115,6 +1320,7 @@ def _rank_provider_candidates(candidates, preferred=None, exclude=None):
         success_rate = completed / total if total else 0.5
         return (
             0 if name == preferred else 1,
+            fallback_position.get(name, 999),
             -success_rate,
             -completed,
             failed,
@@ -1644,6 +1850,162 @@ def _resolve_missing_episode_urls(series_url, missing_labels):
     return matches
 
 
+def _queue_missing_episode_labels(
+    *,
+    series_url,
+    title,
+    missing_labels,
+    language="German Dub",
+    preferred_provider=None,
+    custom_path_id=None,
+    username=None,
+    source="library:missing",
+):
+    if not series_url:
+        raise ValueError("series_url is required")
+    if not isinstance(missing_labels, list) or not missing_labels:
+        raise ValueError("missing_labels are required")
+    if (
+        language == "English Sub"
+        and os.environ.get("ANIWORLD_DISABLE_ENGLISH_SUB", "0") == "1"
+    ):
+        raise PermissionError("English Sub downloads are disabled")
+
+    resolved = _resolve_missing_episode_urls(series_url, missing_labels)
+    if not resolved:
+        raise LookupError("No matching missing episodes found")
+
+    provider_options = {}
+    common_providers = None
+    for label, ep_url, episode_obj in resolved:
+        options = list(
+            _extract_provider_info(getattr(episode_obj, "provider_data", None)).get(
+                language, []
+            )
+            or []
+        )
+        provider_options[label] = {"url": ep_url, "options": options}
+        option_set = set(options)
+        common_providers = option_set if common_providers is None else (common_providers & option_set)
+
+    selected_provider = None
+    if common_providers:
+        if preferred_provider and preferred_provider in common_providers:
+            selected_provider = preferred_provider
+        else:
+            for provider_name in _WORKING_PROVIDER_PREFERENCE:
+                if provider_name in common_providers:
+                    selected_provider = provider_name
+                    break
+            if not selected_provider:
+                selected_provider = sorted(common_providers)[0]
+        episode_urls = [item[1] for item in resolved]
+        skipped_unavailable = 0
+    else:
+        provider_counts = {}
+        for item in provider_options.values():
+            for provider_name in item["options"]:
+                provider_counts[provider_name] = provider_counts.get(provider_name, 0) + 1
+        if preferred_provider and preferred_provider in provider_counts:
+            selected_provider = preferred_provider
+        elif provider_counts:
+            selected_provider = sorted(
+                provider_counts.items(),
+                key=lambda pair: (
+                    -pair[1],
+                    _WORKING_PROVIDER_PREFERENCE.index(pair[0])
+                    if pair[0] in _WORKING_PROVIDER_PREFERENCE
+                    else 999,
+                    pair[0],
+                ),
+            )[0][0]
+        if not selected_provider:
+            raise RuntimeError(
+                f"No provider is available for {language} on the missing episodes."
+            )
+        episode_urls = [
+            item["url"]
+            for item in provider_options.values()
+            if selected_provider in item["options"]
+        ]
+        skipped_unavailable = len(resolved) - len(episode_urls)
+
+    conflict_guard = _filter_conflicting_queue_episodes(series_url, language, episode_urls)
+    queueable_episodes = conflict_guard["episodes"]
+    if not queueable_episodes:
+        err = RuntimeError("Missing episodes are already queued or currently downloading.")
+        err.kind = "queue_conflict"
+        err.payload = {
+            "skipped_conflicts": conflict_guard["skipped"],
+            "skipped_unavailable": skipped_unavailable,
+            "conflicts": conflict_guard["conflicts"],
+        }
+        raise err
+
+    queue_id = add_to_queue(
+        title,
+        series_url,
+        queueable_episodes,
+        language,
+        selected_provider,
+        username,
+        custom_path_id=custom_path_id,
+        source=source,
+    )
+    return {
+        "queue_id": queue_id,
+        "provider": selected_provider,
+        "queued_episodes": len(queueable_episodes),
+        "skipped_unavailable": skipped_unavailable,
+        "skipped_conflicts": conflict_guard["skipped"],
+    }
+
+
+def _run_library_auto_repair(language, preferred_provider, username=None):
+    compare_payload = _get_cached_library_compare(refresh=True)
+    snapshot = _get_cached_library_snapshot(include_meta=True)
+    titles_by_url = {}
+    for location in snapshot.get("locations", []):
+        title_groups = []
+        if location.get("lang_folders"):
+            for lang_folder in location.get("lang_folders", []):
+                title_groups.extend(lang_folder.get("titles", []))
+        else:
+            title_groups.extend(location.get("titles", []))
+        for title in title_groups:
+            series_url = str(title.get("series_url") or "").strip()
+            if series_url:
+                titles_by_url[series_url] = title
+
+    created = []
+    skipped = []
+    for series_url, compare in (compare_payload.get("items") or {}).items():
+        missing = list(compare.get("missing") or [])
+        if not missing:
+            continue
+        title_info = titles_by_url.get(series_url, {})
+        try:
+            result = _queue_missing_episode_labels(
+                series_url=series_url,
+                title=title_info.get("folder") or title_info.get("title") or series_url,
+                missing_labels=missing,
+                language=language,
+                preferred_provider=preferred_provider,
+                username=username,
+                source="library:repair",
+            )
+            created.append(
+                {
+                    "series_url": series_url,
+                    "title": title_info.get("folder") or series_url,
+                    "queued_episodes": result["queued_episodes"],
+                }
+            )
+        except Exception as exc:
+            skipped.append({"series_url": series_url, "reason": str(exc)})
+    return {"created": created, "skipped": skipped}
+
+
 def _get_cached_stats_payload(username=None):
     cache_key = "stats:summary:global"
     cached = _cache_get(cache_key, 45.0)
@@ -1780,6 +2142,8 @@ def _queue_worker():
                     "failed" if errors and len(errors) == len(episodes) else "completed"
                 )
                 set_queue_status(item["id"], status)
+                if status == "completed" and item.get("series_url"):
+                    touch_series_last_downloaded(item.get("series_url"))
                 record_audit_event(
                     "download.completed" if status == "completed" else "download.failed",
                     username=item.get("username"),
@@ -2007,6 +2371,8 @@ def _run_autosync_for_job(job):
             update_fields["last_new_found"] = now_str
 
         update_autosync_job(job["id"], **update_fields)
+        if job.get("series_url"):
+            touch_series_last_synced(job.get("series_url"))
         _emit_ui_event("autosync", "dashboard", "nav", "settings")
     except Exception as e:
         logger.error("Auto-sync failed for '%s': %s", job.get("title", "?"), e)
@@ -2284,6 +2650,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     init_search_history_db()
     init_user_preferences_db()
     init_audit_log_db()
+    init_provider_score_history_db()
 
     # Wire up captcha hooks so the Playwright module can signal the Web UI
     from ..playwright import captcha as _captcha_mod
@@ -2457,6 +2824,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             )
             username, _ = _get_current_user_info()
             touch_favorite(url, username=username)
+            series_meta = get_series_meta(url) or {}
             return jsonify(
                 {
                     "title": title,
@@ -2466,6 +2834,8 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                     "release_year": getattr(target, "release_year", ""),
                     "is_favorite": bool(get_favorite(url, username=username)),
                     "auto_sync_supported": bool(prov.series_cls),
+                    "last_downloaded_at": series_meta.get("last_downloaded_at"),
+                    "last_synced_at": series_meta.get("last_synced_at"),
                 }
             )
         except Exception as e:
@@ -2958,6 +3328,10 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     def provider_health_page():
         return render_template("provider_health.html")
 
+    @app.route("/diagnostics")
+    def diagnostics_page():
+        return render_template("diagnostics.html")
+
     @app.route("/audit")
     def audit_page():
         return render_template("audit.html")
@@ -3064,6 +3438,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     @app.route("/api/settings", methods=["GET"])
     def api_settings():
         username, _ = _get_current_user_info()
+        ui_preset = get_user_preference(username, "ui_preset", "custom")
         ui_mode = get_user_preference(username, "ui_mode", "cozy")
         ui_scale = get_user_preference(username, "ui_scale", "100")
         ui_theme = get_user_preference(username, "ui_theme", "ocean")
@@ -3120,6 +3495,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             username, "browser_notify_system", "1"
         )
         payload = _settings_payload(
+            ui_preset=ui_preset,
             ui_mode=ui_mode,
             ui_scale=ui_scale,
             ui_theme=ui_theme,
@@ -3152,6 +3528,24 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         data = request.get_json(silent=True) or {}
         if "download_path" in data:
             os.environ[_ENV_DOWNLOAD_PATH] = str(data["download_path"]).strip()
+        if "bandwidth_limit_kbps" in data:
+            os.environ[_ENV_BANDWIDTH_LIMIT] = _normalize_bandwidth_limit(
+                data["bandwidth_limit_kbps"]
+            )
+        if "provider_fallback_order" in data:
+            os.environ[_ENV_PROVIDER_FALLBACK_ORDER] = (
+                _normalize_provider_fallback_order(data["provider_fallback_order"])
+            )
+        if "disk_warn_gb" in data:
+            os.environ[_ENV_DISK_WARN_GB] = _normalize_disk_guard_threshold(
+                data["disk_warn_gb"], "10", 5000
+            )
+        if "disk_warn_percent" in data:
+            os.environ[_ENV_DISK_WARN_PERCENT] = _normalize_disk_guard_threshold(
+                data["disk_warn_percent"], "12", 100
+            )
+        if "library_auto_repair" in data:
+            _set_bool_env(_ENV_LIBRARY_AUTO_REPAIR, data["library_auto_repair"])
         if "lang_separation" in data:
             _set_bool_env(_ENV_LANG_SEPARATION, data["lang_separation"])
         if "disable_english_sub" in data:
@@ -3177,6 +3571,10 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 return jsonify({"error": f"Invalid sync_provider: {prov}"}), 400
             os.environ[_ENV_SYNC_PROVIDER] = prov
         username, _ = _get_current_user_info()
+        if "ui_preset" in data:
+            set_user_preference(
+                username, "ui_preset", _normalize_ui_preset(data["ui_preset"])
+            )
         if "ui_mode" in data:
             ui_mode = _normalize_ui_mode(data["ui_mode"])
             set_user_preference(username, "ui_mode", ui_mode)
@@ -3312,12 +3710,18 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 if key
                 in {
                     "download_path",
+                    "bandwidth_limit_kbps",
+                    "provider_fallback_order",
+                    "disk_warn_gb",
+                    "disk_warn_percent",
+                    "library_auto_repair",
                     "lang_separation",
                     "disable_english_sub",
                     "experimental_filmpalast",
                     "sync_schedule",
                     "sync_language",
                     "sync_provider",
+                    "ui_preset",
                     "ui_mode",
                     "ui_scale",
                     "ui_theme",
@@ -3775,7 +4179,105 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
     @app.route("/api/provider-health")
     def api_provider_health():
-        return jsonify({"items": get_provider_health()})
+        items = get_provider_health()
+        snapshot_provider_score_history(items)
+        return jsonify({"items": items})
+
+    @app.route("/api/provider-health/history")
+    def api_provider_health_history():
+        try:
+            hours = max(24, min(int(request.args.get("hours", "168")), 24 * 30))
+        except ValueError:
+            hours = 168
+        return jsonify({"items": get_provider_score_history(hours=hours), "hours": hours})
+
+    @app.route("/api/diagnostics")
+    def api_diagnostics():
+        return jsonify(_build_diagnostics_payload())
+
+    @app.route("/api/backup/export")
+    def api_backup_export():
+        username, _ = _get_current_user_info()
+        payload = {
+            "exported_at": int(time.time()),
+            "version": VERSION,
+            "settings": _settings_payload(
+                ui_preset=get_user_preference(username, "ui_preset", "custom"),
+                ui_mode=get_user_preference(username, "ui_mode", "cozy"),
+                ui_scale=get_user_preference(username, "ui_scale", "100"),
+                ui_theme=get_user_preference(username, "ui_theme", "ocean"),
+                ui_radius=get_user_preference(username, "ui_radius", "soft"),
+                ui_motion=get_user_preference(username, "ui_motion", "normal"),
+                ui_width=get_user_preference(username, "ui_width", "standard"),
+                ui_modal_width=get_user_preference(username, "ui_modal_width", "standard"),
+                ui_nav_size=get_user_preference(username, "ui_nav_size", "standard"),
+                ui_table_density=get_user_preference(username, "ui_table_density", "standard"),
+                ui_background=get_user_preference(username, "ui_background", "dynamic"),
+                search_default_sort=get_user_preference(username, "search_default_sort", "source"),
+                search_default_genres=get_user_preference(username, "search_default_genres", ""),
+                search_default_year_from=get_user_preference(username, "search_default_year_from", ""),
+                search_default_year_to=get_user_preference(username, "search_default_year_to", ""),
+                search_default_favorites_only=get_user_preference(username, "search_default_favorites_only", "0"),
+                search_default_downloaded_only=get_user_preference(username, "search_default_downloaded_only", "0"),
+                browser_notifications_enabled=get_user_preference(username, "browser_notifications_enabled", "0"),
+                browser_notify_browse=get_user_preference(username, "browser_notify_browse", "1"),
+                browser_notify_queue=get_user_preference(username, "browser_notify_queue", "1"),
+                browser_notify_autosync=get_user_preference(username, "browser_notify_autosync", "1"),
+                browser_notify_library=get_user_preference(username, "browser_notify_library", "1"),
+                browser_notify_settings=get_user_preference(username, "browser_notify_settings", "1"),
+                browser_notify_system=get_user_preference(username, "browser_notify_system", "1"),
+            ),
+            "tables": export_app_state(),
+        }
+        buffer = BytesIO(json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
+        return send_file(
+            buffer,
+            mimetype="application/json",
+            as_attachment=True,
+            download_name=f"aniworld-backup-{int(time.time())}.json",
+        )
+
+    @app.route("/api/backup/import", methods=["POST"])
+    def api_backup_import():
+        upload = request.files.get("backup")
+        if not upload:
+            return jsonify({"error": "backup file is required"}), 400
+        try:
+            payload = json.loads(upload.read().decode("utf-8"))
+        except Exception:
+            return jsonify({"error": "Invalid backup file"}), 400
+        settings_payload = payload.get("settings") or {}
+        if settings_payload:
+            os.environ[_ENV_DOWNLOAD_PATH] = str(
+                settings_payload.get("download_path") or os.environ.get(_ENV_DOWNLOAD_PATH, "")
+            ).strip()
+            os.environ[_ENV_BANDWIDTH_LIMIT] = _normalize_bandwidth_limit(
+                settings_payload.get("bandwidth_limit_kbps", os.environ.get(_ENV_BANDWIDTH_LIMIT, "0"))
+            )
+            os.environ[_ENV_PROVIDER_FALLBACK_ORDER] = _normalize_provider_fallback_order(
+                settings_payload.get("provider_fallback_order", os.environ.get(_ENV_PROVIDER_FALLBACK_ORDER, ""))
+            )
+            os.environ[_ENV_DISK_WARN_GB] = _normalize_disk_guard_threshold(
+                settings_payload.get("disk_warn_gb", os.environ.get(_ENV_DISK_WARN_GB, "10")),
+                "10",
+                5000,
+            )
+            os.environ[_ENV_DISK_WARN_PERCENT] = _normalize_disk_guard_threshold(
+                settings_payload.get("disk_warn_percent", os.environ.get(_ENV_DISK_WARN_PERCENT, "12")),
+                "12",
+                100,
+            )
+            _set_bool_env(_ENV_LIBRARY_AUTO_REPAIR, settings_payload.get("library_auto_repair", "0"))
+        counts = import_app_state(payload.get("tables") or payload)
+        _record_user_event(
+            "backup.imported",
+            subject_type="backup",
+            subject="restore",
+            details={"tables": counts},
+        )
+        _cache_invalidate("stats:", "dashboard:", "library:")
+        _emit_ui_event("settings", "dashboard", "library", "nav", "autosync")
+        return jsonify({"ok": True, "tables": counts})
 
     @app.route("/api/dashboard/stats")
     def api_dashboard_stats():
@@ -3903,7 +4405,17 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     @app.route("/api/library/compare")
     def api_library_compare():
         refresh = str(request.args.get("refresh", "0")).strip() == "1"
-        return jsonify(_get_cached_library_compare(refresh=refresh))
+        payload = _get_cached_library_compare(refresh=refresh)
+        if refresh and os.environ.get(_ENV_LIBRARY_AUTO_REPAIR, "0") == "1":
+            username, _ = _get_current_user_info()
+            payload["auto_repair"] = _run_library_auto_repair(
+                os.environ.get(_ENV_SYNC_LANGUAGE, "German Dub"),
+                os.environ.get(_ENV_SYNC_PROVIDER, "VOE"),
+                username=username,
+            )
+            if payload["auto_repair"]["created"]:
+                _emit_ui_event("queue", "dashboard", "library", "nav")
+        return jsonify(payload)
 
     @app.route("/api/library/queue-missing", methods=["POST"])
     def api_library_queue_missing():
@@ -3919,11 +4431,6 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             return jsonify({"error": "series_url is required"}), 400
         if not isinstance(missing_labels, list) or not missing_labels:
             return jsonify({"error": "missing_labels are required"}), 400
-        if (
-            language == "English Sub"
-            and os.environ.get("ANIWORLD_DISABLE_ENGLISH_SUB", "0") == "1"
-        ):
-            return jsonify({"error": "English Sub downloads are disabled"}), 403
 
         username = None
         if auth_enabled:
@@ -3934,132 +4441,73 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                     if isinstance(user, dict)
                     else getattr(user, "username", None)
                 )
-
-        resolved = _resolve_missing_episode_urls(series_url, missing_labels)
-        if not resolved:
-            return jsonify({"error": "No matching missing episodes found"}), 404
-
-        provider_options = {}
-        common_providers = None
-        for label, ep_url, episode_obj in resolved:
-            options = list(
-                _extract_provider_info(getattr(episode_obj, "provider_data", None)).get(
-                    language, []
-                )
-                or []
+        try:
+            result = _queue_missing_episode_labels(
+                series_url=series_url,
+                title=title,
+                missing_labels=missing_labels,
+                language=language,
+                preferred_provider=preferred_provider,
+                custom_path_id=custom_path_id,
+                username=username,
+                source="library:missing",
             )
-            provider_options[label] = {"url": ep_url, "options": options}
-            option_set = set(options)
-            common_providers = (
-                option_set
-                if common_providers is None
-                else common_providers & option_set
-            )
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 403
+        except LookupError as exc:
+            return jsonify({"error": str(exc)}), 404
+        except RuntimeError as exc:
+            response = {"error": str(exc), **getattr(exc, "payload", {})}
+            if getattr(exc, "kind", "") == "queue_conflict":
+                response["type"] = "queue_conflict"
+            return jsonify(response), 409
 
-        selected_provider = None
-        if common_providers:
-            if preferred_provider and preferred_provider in common_providers:
-                selected_provider = preferred_provider
-            else:
-                for provider_name in _WORKING_PROVIDER_PREFERENCE:
-                    if provider_name in common_providers:
-                        selected_provider = provider_name
-                        break
-                if not selected_provider:
-                    selected_provider = sorted(common_providers)[0]
-            episode_urls = [item[1] for item in resolved]
-            skipped_unavailable = 0
-        else:
-            provider_counts = {}
-            for item in provider_options.values():
-                for provider_name in item["options"]:
-                    provider_counts[provider_name] = (
-                        provider_counts.get(provider_name, 0) + 1
-                    )
-            if preferred_provider and preferred_provider in provider_counts:
-                selected_provider = preferred_provider
-            elif provider_counts:
-                selected_provider = sorted(
-                    provider_counts.items(),
-                    key=lambda pair: (
-                        -pair[1],
-                        _WORKING_PROVIDER_PREFERENCE.index(pair[0])
-                        if pair[0] in _WORKING_PROVIDER_PREFERENCE
-                        else 999,
-                        pair[0],
-                    ),
-                )[0][0]
-            if not selected_provider:
-                return (
-                    jsonify(
-                        {
-                            "error": f"No provider is available for {language} on the missing episodes."
-                        }
-                    ),
-                    409,
-                )
-            episode_urls = [
-                item["url"]
-                for item in provider_options.values()
-                if selected_provider in item["options"]
-            ]
-            skipped_unavailable = len(resolved) - len(episode_urls)
-
-        conflict_guard = _filter_conflicting_queue_episodes(
-            series_url,
-            language,
-            episode_urls,
-        )
-        queueable_episodes = conflict_guard["episodes"]
-        if not queueable_episodes:
-            return (
-                jsonify(
-                    {
-                        "error": "Missing episodes are already queued or currently downloading.",
-                        "type": "queue_conflict",
-                        "skipped_conflicts": conflict_guard["skipped"],
-                        "skipped_unavailable": skipped_unavailable,
-                        "conflicts": conflict_guard["conflicts"],
-                    }
-                ),
-                409,
-            )
-
-        queue_id = add_to_queue(
-            title,
-            series_url,
-            queueable_episodes,
-            language,
-            selected_provider,
-            username,
-            custom_path_id=custom_path_id,
-            source="library:missing",
-        )
         _record_user_event(
             "library.missing_queued",
             subject_type="library",
             subject=title,
             details={
-                "queue_id": queue_id,
+                "queue_id": result["queue_id"],
                 "series_url": series_url,
                 "language": language,
-                "provider": selected_provider,
-                "queued_episodes": len(queueable_episodes),
+                "provider": result["provider"],
+                "queued_episodes": result["queued_episodes"],
                 "requested_missing": len(missing_labels),
-                "skipped_unavailable": skipped_unavailable,
-                "skipped_conflicts": conflict_guard["skipped"],
+                "skipped_unavailable": result["skipped_unavailable"],
+                "skipped_conflicts": result["skipped_conflicts"],
             },
         )
         _emit_ui_event("queue", "dashboard", "library", "nav")
-        return jsonify(
-            {
-                "queue_id": queue_id,
-                "provider": selected_provider,
-                "queued_episodes": len(queueable_episodes),
-                "skipped_unavailable": skipped_unavailable,
-                "skipped_conflicts": conflict_guard["skipped"],
-            }
+        return jsonify(result)
+
+    @app.route("/api/library/repair-missing", methods=["POST"])
+    def api_library_repair_missing():
+        data = request.get_json(silent=True) or {}
+        language = str(data.get("language") or "").strip() or os.environ.get(
+            _ENV_SYNC_LANGUAGE, "German Dub"
         )
+        preferred_provider = str(data.get("provider") or "").strip() or os.environ.get(
+            _ENV_SYNC_PROVIDER, "VOE"
+        )
+        username, _ = _get_current_user_info()
+
+        repair_result = _run_library_auto_repair(
+            language, preferred_provider, username=username
+        )
+
+        _record_user_event(
+            "library.repair_triggered",
+            subject_type="library",
+            subject="repair-missing",
+            details={
+                "queued_titles": len(repair_result["created"]),
+                "skipped_titles": len(repair_result["skipped"]),
+                "language": language,
+                "provider": preferred_provider,
+            },
+        )
+        _emit_ui_event("queue", "dashboard", "library", "nav")
+        return jsonify({"ok": True, **repair_result})
 
     @app.route("/api/library/delete", methods=["POST"])
     def api_library_delete():

@@ -153,6 +153,21 @@ _ffmpeg_progress = {
 }
 
 
+def _bandwidth_limit_output_kwargs():
+    raw = str(os.getenv("ANIWORLD_BANDWIDTH_LIMIT_KBPS", "0") or "0").strip()
+    try:
+        limit_kbps = int(float(raw))
+    except (TypeError, ValueError):
+        limit_kbps = 0
+    if limit_kbps <= 0:
+        return {}
+    limit_kbps = max(128, min(limit_kbps, 250000))
+    return {
+        "maxrate": f"{limit_kbps}k",
+        "bufsize": f"{max(limit_kbps * 2, 512)}k",
+    }
+
+
 def get_ffmpeg_progress():
     """Return a snapshot of the current ffmpeg download progress."""
     with _ffmpeg_progress_lock:
@@ -465,6 +480,7 @@ def download(self):
                 stream_metadata = {"metadata:s:a:0": f"language={audio_code}"}
                 if (not wants_clean_video) and sub_video_code:
                     stream_metadata["metadata:s:v:0"] = f"language={sub_video_code}"
+                bandwidth_kwargs = _bandwidth_limit_output_kwargs()
 
                 video_codec = get_video_codec()
                 _run_ffmpeg_with_progress(
@@ -473,6 +489,7 @@ def download(self):
                         vcodec=video_codec,
                         acodec=video_codec,
                         **stream_metadata,
+                        **bandwidth_kwargs,
                     ),
                     label=ep_label,
                 )
@@ -497,12 +514,14 @@ def download(self):
             if need_audio:
                 logger.debug("[DOWNLOADING] audio stream")
                 video_codec = get_video_codec()
+                bandwidth_kwargs = _bandwidth_limit_output_kwargs()
                 _run_ffmpeg_with_progress(
                     ffmpeg.input(self.stream_url, **input_kwargs).output(
                         str(temp_audio),
                         acodec=video_codec,
                         map="0:a:0?",
                         **{"metadata:s:a:0": f"language={audio_code}"},
+                        **bandwidth_kwargs,
                     ),
                     label=ep_label,
                 )
@@ -510,6 +529,7 @@ def download(self):
             if need_video:
                 logger.debug("[DOWNLOADING] video stream")
                 video_codec = get_video_codec()
+                bandwidth_kwargs = _bandwidth_limit_output_kwargs()
                 _run_ffmpeg_with_progress(
                     ffmpeg.input(self.stream_url, **input_kwargs).output(
                         str(temp_video),
@@ -520,6 +540,7 @@ def download(self):
                             if wants_clean_video
                             else {"metadata:s:v:0": f"language={sub_video_code}"}
                         ),
+                        **bandwidth_kwargs,
                     ),
                     label=ep_label,
                 )

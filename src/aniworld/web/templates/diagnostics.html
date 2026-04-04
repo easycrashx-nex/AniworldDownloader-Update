@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Diagnostics - AniWorld Downloader{% endblock %}
+{% block content %}
+<div class="settings-container insight-shell">
+  <div class="page-header">
+    <span class="eyebrow">Settings</span>
+    <h1>Diagnostics</h1>
+    <p class="page-description">
+      Inspect worker state, cache warmup, storage headroom, and database
+      pressure from one place.
+    </p>
+  </div>
+
+  <section class="dashboard-panel">
+    <div class="section-heading">
+      <div>
+        <span class="section-kicker">Runtime</span>
+        <h2 class="browse-heading">System Diagnostics</h2>
+      </div>
+      <p class="section-description">
+        Live server, queue, sync, cache, and disk information from the running
+        web process.
+      </p>
+    </div>
+    <div class="diagnostics-grid" id="diagnosticsSummary">
+      <div class="stats-empty">Loading diagnostics...</div>
+    </div>
+  </section>
+
+  <section class="dashboard-panel">
+    <div class="section-heading">
+      <div>
+        <span class="section-kicker">Storage</span>
+        <h2 class="browse-heading">Disk Guard</h2>
+      </div>
+      <p class="section-description">
+        Warn thresholds and available space for the active download targets.
+      </p>
+    </div>
+    <div class="settings-disk-list" id="diagnosticsDiskGuard">
+      <div class="settings-disk-card">
+        <strong>Loading...</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="dashboard-panel">
+    <div class="section-heading">
+      <div>
+        <span class="section-kicker">Cache</span>
+        <h2 class="browse-heading">Runtime Cache</h2>
+      </div>
+      <p class="section-description">
+        See which cached surfaces are warm and how old each entry is right now.
+      </p>
+    </div>
+    <div class="diagnostics-list" id="diagnosticsCacheList">
+      <div class="stats-empty">Loading cache data...</div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='diagnostics.js') }}"></script>
+{% endblock %}

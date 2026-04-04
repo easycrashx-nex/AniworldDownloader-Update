@@ -1,5 +1,7 @@
 const providerHealthList = document.getElementById("providerHealthList");
+const providerHistoryList = document.getElementById("providerHistoryList");
 let providerHealthRequest = null;
+let providerHistoryRequest = null;
 
 function providerHealthTone(health) {
   return health || "idle";
@@ -55,6 +57,79 @@ function renderProviderHealth(items) {
     .join("");
 }
 
+function renderProviderHistory(items) {
+  if (!providerHistoryList) return;
+  if (!items.length) {
+    providerHistoryList.innerHTML =
+      '<div class="stats-empty">No provider score history has been collected yet.</div>';
+    return;
+  }
+
+  const grouped = new Map();
+  items.forEach((item) => {
+    const key = item.provider || "Unknown";
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(item);
+  });
+
+  providerHistoryList.innerHTML = Array.from(grouped.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([provider, entries]) => {
+      const ordered = entries
+        .slice()
+        .sort(
+          (a, b) =>
+            new Date(a.snapshotted_at || 0).getTime() -
+            new Date(b.snapshotted_at || 0).getTime(),
+        );
+      const latest = ordered[ordered.length - 1] || {};
+      const maxScore = Math.max(
+        1,
+        ...ordered.map((entry) => Number(entry.score || 0)),
+      );
+      return `
+        <article class="provider-history-card">
+          <div class="provider-history-head">
+            <div>
+              <strong>${escProviderHealth(provider)}</strong>
+              <span>${ordered.length} snapshots</span>
+            </div>
+            <div class="provider-history-meta">
+              <span>Latest ${Number(latest.score || 0)}</span>
+              <span>${escProviderHealth(
+                formatProviderDate(latest.snapshotted_at),
+              )}</span>
+            </div>
+          </div>
+          <div class="provider-history-bars">
+            ${ordered
+              .slice(-12)
+              .map((entry) => {
+                const score = Number(entry.score || 0);
+                const height = Math.max(10, Math.round((score / maxScore) * 100));
+                return `
+                  <span
+                    class="provider-history-bar"
+                    style="height:${height}%"
+                    title="${escProviderHealth(
+                      `${provider}: ${score} at ${formatProviderDate(
+                        entry.snapshotted_at,
+                      )}`,
+                    )}"
+                  ></span>`;
+              })
+              .join("")}
+          </div>
+          <div class="provider-history-foot">
+            <span>${Number(latest.completed || 0)} completed</span>
+            <span>${Number(latest.failed || 0)} failed</span>
+            <span>${Number(latest.running || 0)} running</span>
+          </div>
+        </article>`;
+    })
+    .join("");
+}
+
 async function loadProviderHealth() {
   if (!providerHealthList) return null;
   if (providerHealthRequest) return providerHealthRequest;
@@ -75,6 +150,26 @@ async function loadProviderHealth() {
   return providerHealthRequest;
 }
 
+async function loadProviderHistory() {
+  if (!providerHistoryList) return null;
+  if (providerHistoryRequest) return providerHistoryRequest;
+  providerHistoryRequest = (async () => {
+    try {
+      const resp = await fetch("/api/provider-health/history?hours=168");
+      const data = await resp.json();
+      renderProviderHistory(data.items || []);
+      return data.items || [];
+    } catch (e) {
+      providerHistoryList.innerHTML =
+        '<div class="stats-empty">Provider score history could not be loaded.</div>';
+      return null;
+    } finally {
+      providerHistoryRequest = null;
+    }
+  })();
+  return providerHistoryRequest;
+}
+
 function escProviderHealth(value) {
   const div = document.createElement("div");
   div.textContent = value == null ? "" : String(value);
@@ -82,15 +177,18 @@ function escProviderHealth(value) {
 }
 
 loadProviderHealth();
+loadProviderHistory();
 
 if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
   window.LiveUpdates.subscribe(["queue", "dashboard", "settings"], () => {
     loadProviderHealth();
+    loadProviderHistory();
   });
 }
 
 setInterval(() => {
   if (!window.LiveUpdates || !window.LiveUpdates.isConnected()) {
     loadProviderHealth();
+    loadProviderHistory();
   }
 }, 30000);

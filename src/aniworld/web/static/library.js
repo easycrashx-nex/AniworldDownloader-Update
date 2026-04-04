@@ -15,6 +15,27 @@ const libraryIssueFilter = document.getElementById("libraryIssueFilter");
 const librarySummary = document.getElementById("librarySummary");
 const libraryCompareStatus = document.getElementById("libraryCompareStatus");
 const libraryCompareBtn = document.getElementById("libraryCompareBtn");
+const libraryRepairBtn = document.getElementById("libraryRepairBtn");
+
+function formatLibraryRelativeDate(value) {
+  if (!value) return "Never";
+  const normalized = String(value).includes("T")
+    ? String(value)
+    : String(value).replace(" ", "T") + "Z";
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const diffMinutes = Math.max(
+    0,
+    Math.floor((Date.now() - date.getTime()) / 60000),
+  );
+  if (diffMinutes < 1) return "Just now";
+  if (diffMinutes < 60) return `${diffMinutes} min ago`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours} h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays} d ago`;
+  return date.toLocaleDateString();
+}
 
 function getExpandedState() {
   var state = { locations: {}, langFolders: {}, titles: {}, seasons: {} };
@@ -339,6 +360,42 @@ function queueMissingLibraryEpisodesFromButton(button) {
   );
 }
 
+async function repairMissingLibraryEpisodes() {
+  if (!libraryRepairBtn) return;
+  const originalLabel = libraryRepairBtn.textContent;
+  libraryRepairBtn.disabled = true;
+  libraryRepairBtn.textContent = "Repairing...";
+  try {
+    const resp = await fetch("/api/library/repair-missing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) {
+      showToast(data.error || "Library repair could not be started");
+      return;
+    }
+    const created = Number(data.created || 0);
+    const skipped = Number(data.skipped || 0);
+    showToast(
+      created > 0
+        ? skipped > 0
+          ? `Queued ${created} missing episode(s), skipped ${skipped}`
+          : `Queued ${created} missing episode(s)`
+        : "No missing episodes needed repair",
+    );
+    if (window.LiveUpdates && typeof window.LiveUpdates.refresh === "function") {
+      window.LiveUpdates.refresh(["queue", "library", "dashboard", "nav"]);
+    }
+  } catch (e) {
+    showToast("Library repair could not be started");
+  } finally {
+    libraryRepairBtn.disabled = false;
+    libraryRepairBtn.textContent = originalLabel;
+  }
+}
+
 function matchesIssueFilter(title, issueValue) {
   if (!issueValue) return true;
   var insights = title.insights || buildTitleInsights(title);
@@ -466,6 +523,9 @@ function setLibraryCompareStatus(message, loading) {
     libraryCompareBtn.disabled = !!loading;
     libraryCompareBtn.textContent = loading ? "Comparing..." : "Refresh Compare";
   }
+  if (libraryRepairBtn) {
+    libraryRepairBtn.disabled = !!loading;
+  }
 }
 
 async function loadLibraryCompare(forceRefresh) {
@@ -498,6 +558,17 @@ async function loadLibraryCompare(forceRefresh) {
         }
       } else {
         setLibraryCompareStatus("Source compare finished.", false);
+      }
+      if (data.auto_repair) {
+        const created = Number(data.auto_repair.created || 0);
+        const skipped = Number(data.auto_repair.skipped || 0);
+        if (created > 0) {
+          showToast(
+            skipped > 0
+              ? `Auto-repair queued ${created} episode(s), skipped ${skipped}`
+              : `Auto-repair queued ${created} episode(s)`,
+          );
+        }
       }
       applyLibraryFilters();
     } catch (e) {
@@ -668,6 +739,18 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
       }
       html.push("</div>");
     }
+    html.push('<div class="library-title-supporting">');
+    html.push(
+      '<span>Last downloaded: ' +
+        escLib(formatLibraryRelativeDate(title.last_downloaded_at)) +
+        "</span>",
+    );
+    html.push(
+      '<span>Last synced: ' +
+        escLib(formatLibraryRelativeDate(title.last_synced_at)) +
+        "</span>",
+    );
+    html.push("</div>");
     html.push("</div>");
     html.push("</div>");
     html.push("</div>");
@@ -737,6 +820,7 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
         );
         if (localMissingList.length) {
           html.push('<div class="library-missing-wrap">');
+          html.push('<span class="library-missing-heading">Local gaps</span>');
           html.push('<div class="library-missing-list">');
           localMissingList.forEach(function (label) {
             html.push(
@@ -757,6 +841,9 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
         );
         if (sourceMissingList.length) {
           html.push('<div class="library-missing-wrap">');
+          html.push(
+            '<span class="library-missing-heading">Missing from source compare</span>',
+          );
           html.push('<div class="library-missing-list">');
           sourceMissingList.forEach(function (label) {
             html.push(
@@ -1144,6 +1231,11 @@ if (libraryIssueFilter) {
 if (libraryCompareBtn) {
   libraryCompareBtn.addEventListener("click", function () {
     loadLibraryCompare(true);
+  });
+}
+if (libraryRepairBtn) {
+  libraryRepairBtn.addEventListener("click", function () {
+    repairMissingLibraryEpisodes();
   });
 }
 

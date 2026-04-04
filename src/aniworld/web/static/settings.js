@@ -5,6 +5,7 @@ const disableEnglishSubCb = document.getElementById("disableEnglishSub");
 const experimentalFilmpalastCb = document.getElementById(
   "experimentalFilmpalast",
 );
+const uiPresetSelect = document.getElementById("uiPreset");
 const uiModeSelect = document.getElementById("uiMode");
 const uiScaleSelect = document.getElementById("uiScale");
 const uiThemeSelect = document.getElementById("uiTheme");
@@ -15,6 +16,14 @@ const uiModalWidthSelect = document.getElementById("uiModalWidth");
 const uiNavSizeSelect = document.getElementById("uiNavSize");
 const uiTableDensitySelect = document.getElementById("uiTableDensity");
 const uiBackgroundSelect = document.getElementById("uiBackground");
+const bandwidthLimitInput = document.getElementById("bandwidthLimit");
+const providerFallbackOrderInput = document.getElementById(
+  "providerFallbackOrder",
+);
+const diskWarnGbInput = document.getElementById("diskWarnGb");
+const diskWarnPercentInput = document.getElementById("diskWarnPercent");
+const libraryAutoRepairCb = document.getElementById("libraryAutoRepair");
+const backupImportFileInput = document.getElementById("backupImportFile");
 const serverBindHostValue = document.getElementById("serverBindHost");
 const serverPortValue = document.getElementById("serverPort");
 const serverScopeValue = document.getElementById("serverScope");
@@ -60,6 +69,52 @@ const syncProviderSelect = document.getElementById("syncProvider");
 let settingsRequest = null;
 let customPathsRequest = null;
 const SYNC_LANGUAGE_OPTIONS = ["German Dub", "English Sub", "German Sub"];
+const UI_PRESETS = {
+  control: {
+    ui_mode: "compact",
+    ui_theme: "ocean",
+    ui_radius: "structured",
+    ui_motion: "fast",
+    ui_width: "wide",
+    ui_modal_width: "compact",
+    ui_nav_size: "compact",
+    ui_table_density: "compact",
+    ui_background: "grid",
+  },
+  cinematic: {
+    ui_mode: "airy",
+    ui_theme: "sunset",
+    ui_radius: "round",
+    ui_motion: "slow",
+    ui_width: "wide",
+    ui_modal_width: "wide",
+    ui_nav_size: "large",
+    ui_table_density: "relaxed",
+    ui_background: "cinematic",
+  },
+  frosted: {
+    ui_mode: "cozy",
+    ui_theme: "arctic",
+    ui_radius: "soft",
+    ui_motion: "normal",
+    ui_width: "standard",
+    ui_modal_width: "standard",
+    ui_nav_size: "standard",
+    ui_table_density: "standard",
+    ui_background: "frost",
+  },
+  neon: {
+    ui_mode: "tight",
+    ui_theme: "electric",
+    ui_radius: "soft",
+    ui_motion: "fast",
+    ui_width: "wide",
+    ui_modal_width: "standard",
+    ui_nav_size: "compact",
+    ui_table_density: "compact",
+    ui_background: "pulse",
+  },
+};
 
 async function updateSettings(body) {
   const resp = await fetch("/api/settings", {
@@ -79,6 +134,7 @@ function refreshSettingsSelects() {
   if (syncScheduleSelect) window.refreshCustomSelect(syncScheduleSelect);
   if (syncLanguageSelect) window.refreshCustomSelect(syncLanguageSelect);
   if (syncProviderSelect) window.refreshCustomSelect(syncProviderSelect);
+  if (uiPresetSelect) window.refreshCustomSelect(uiPresetSelect);
   if (uiModeSelect) window.refreshCustomSelect(uiModeSelect);
   if (uiScaleSelect) window.refreshCustomSelect(uiScaleSelect);
   if (uiThemeSelect) window.refreshCustomSelect(uiThemeSelect);
@@ -116,6 +172,70 @@ function escapeSettingsHtml(value) {
   const div = document.createElement("div");
   div.textContent = value == null ? "" : String(value);
   return div.innerHTML;
+}
+
+function buildManualUiPayload(payload) {
+  const nextPayload = Object.assign({}, payload);
+  if (uiPresetSelect && uiPresetSelect.value !== "custom") {
+    uiPresetSelect.value = "custom";
+    nextPayload.ui_preset = "custom";
+  }
+  refreshSettingsSelects();
+  return nextPayload;
+}
+
+function applyUiPresetValues(values = {}) {
+  if (uiModeSelect && values.ui_mode) uiModeSelect.value = values.ui_mode;
+  if (uiThemeSelect && values.ui_theme) uiThemeSelect.value = values.ui_theme;
+  if (uiRadiusSelect && values.ui_radius) uiRadiusSelect.value = values.ui_radius;
+  if (uiMotionSelect && values.ui_motion) uiMotionSelect.value = values.ui_motion;
+  if (uiWidthSelect && values.ui_width) uiWidthSelect.value = values.ui_width;
+  if (uiModalWidthSelect && values.ui_modal_width) {
+    uiModalWidthSelect.value = values.ui_modal_width;
+  }
+  if (uiNavSizeSelect && values.ui_nav_size) {
+    uiNavSizeSelect.value = values.ui_nav_size;
+  }
+  if (uiTableDensitySelect && values.ui_table_density) {
+    uiTableDensitySelect.value = values.ui_table_density;
+  }
+  if (uiBackgroundSelect && values.ui_background) {
+    uiBackgroundSelect.value = values.ui_background;
+  }
+  refreshSettingsSelects();
+  if (typeof window.applyUiDensity === "function" && values.ui_mode) {
+    window.applyUiDensity(values.ui_mode);
+  }
+  if (typeof window.applyUiTheme === "function" && values.ui_theme) {
+    window.applyUiTheme(values.ui_theme);
+  }
+  if (typeof window.applyUiRadius === "function" && values.ui_radius) {
+    window.applyUiRadius(values.ui_radius);
+  }
+  if (typeof window.applyUiMotion === "function" && values.ui_motion) {
+    window.applyUiMotion(values.ui_motion);
+  }
+  if (typeof window.applyUiWidth === "function" && values.ui_width) {
+    window.applyUiWidth(values.ui_width);
+  }
+  if (
+    typeof window.applyUiModalWidth === "function" &&
+    values.ui_modal_width
+  ) {
+    window.applyUiModalWidth(values.ui_modal_width);
+  }
+  if (typeof window.applyUiNavSize === "function" && values.ui_nav_size) {
+    window.applyUiNavSize(values.ui_nav_size);
+  }
+  if (
+    typeof window.applyUiTableDensity === "function" &&
+    values.ui_table_density
+  ) {
+    window.applyUiTableDensity(values.ui_table_density);
+  }
+  if (typeof window.applyUiBackground === "function" && values.ui_background) {
+    window.applyUiBackground(values.ui_background);
+  }
 }
 
 function renderDiskGuard(data) {
@@ -246,6 +366,7 @@ async function loadSettings() {
         disableEnglishSubCb.checked = data.disable_english_sub === "1";
       if (experimentalFilmpalastCb)
         experimentalFilmpalastCb.checked = data.experimental_filmpalast === "1";
+      if (uiPresetSelect) uiPresetSelect.value = data.ui_preset || "custom";
       if (uiModeSelect) uiModeSelect.value = data.ui_mode || "cozy";
       if (uiScaleSelect) uiScaleSelect.value = data.ui_scale || "100";
       if (uiThemeSelect) uiThemeSelect.value = data.ui_theme || "ocean";
@@ -261,6 +382,21 @@ async function loadSettings() {
       }
       if (uiBackgroundSelect) {
         uiBackgroundSelect.value = data.ui_background || "dynamic";
+      }
+      if (bandwidthLimitInput) {
+        bandwidthLimitInput.value = data.bandwidth_limit_kbps || "0";
+      }
+      if (providerFallbackOrderInput) {
+        providerFallbackOrderInput.value = data.provider_fallback_order || "";
+      }
+      if (diskWarnGbInput) {
+        diskWarnGbInput.value = data.disk_warn_gb || "8";
+      }
+      if (diskWarnPercentInput) {
+        diskWarnPercentInput.value = data.disk_warn_percent || "12";
+      }
+      if (libraryAutoRepairCb) {
+        libraryAutoRepairCb.checked = data.library_auto_repair === "1";
       }
       if (serverBindHostValue) {
         serverBindHostValue.textContent = data.server_bind_host || "-";
@@ -441,7 +577,7 @@ async function saveExperimentalFilmpalast() {
 async function saveUiMode() {
   if (!uiModeSelect) return;
   try {
-    await updateSettings({ ui_mode: uiModeSelect.value });
+    await updateSettings(buildManualUiPayload({ ui_mode: uiModeSelect.value }));
     if (typeof window.applyUiDensity === "function") {
       window.applyUiDensity(uiModeSelect.value);
     }
@@ -454,7 +590,7 @@ async function saveUiMode() {
 async function saveUiScale() {
   if (!uiScaleSelect) return;
   try {
-    await updateSettings({ ui_scale: uiScaleSelect.value });
+    await updateSettings(buildManualUiPayload({ ui_scale: uiScaleSelect.value }));
     if (typeof window.applyUiScale === "function") {
       window.applyUiScale(uiScaleSelect.value);
     }
@@ -467,7 +603,7 @@ async function saveUiScale() {
 async function saveUiTheme() {
   if (!uiThemeSelect) return;
   try {
-    await updateSettings({ ui_theme: uiThemeSelect.value });
+    await updateSettings(buildManualUiPayload({ ui_theme: uiThemeSelect.value }));
     if (typeof window.applyUiTheme === "function") {
       window.applyUiTheme(uiThemeSelect.value);
     }
@@ -480,7 +616,7 @@ async function saveUiTheme() {
 async function saveUiRadius() {
   if (!uiRadiusSelect) return;
   try {
-    await updateSettings({ ui_radius: uiRadiusSelect.value });
+    await updateSettings(buildManualUiPayload({ ui_radius: uiRadiusSelect.value }));
     if (typeof window.applyUiRadius === "function") {
       window.applyUiRadius(uiRadiusSelect.value);
     }
@@ -493,7 +629,7 @@ async function saveUiRadius() {
 async function saveUiMotion() {
   if (!uiMotionSelect) return;
   try {
-    await updateSettings({ ui_motion: uiMotionSelect.value });
+    await updateSettings(buildManualUiPayload({ ui_motion: uiMotionSelect.value }));
     if (typeof window.applyUiMotion === "function") {
       window.applyUiMotion(uiMotionSelect.value);
     }
@@ -506,7 +642,7 @@ async function saveUiMotion() {
 async function saveUiWidth() {
   if (!uiWidthSelect) return;
   try {
-    await updateSettings({ ui_width: uiWidthSelect.value });
+    await updateSettings(buildManualUiPayload({ ui_width: uiWidthSelect.value }));
     if (typeof window.applyUiWidth === "function") {
       window.applyUiWidth(uiWidthSelect.value);
     }
@@ -519,7 +655,9 @@ async function saveUiWidth() {
 async function saveUiModalWidth() {
   if (!uiModalWidthSelect) return;
   try {
-    await updateSettings({ ui_modal_width: uiModalWidthSelect.value });
+    await updateSettings(
+      buildManualUiPayload({ ui_modal_width: uiModalWidthSelect.value }),
+    );
     if (typeof window.applyUiModalWidth === "function") {
       window.applyUiModalWidth(uiModalWidthSelect.value);
     }
@@ -532,7 +670,9 @@ async function saveUiModalWidth() {
 async function saveUiNavSize() {
   if (!uiNavSizeSelect) return;
   try {
-    await updateSettings({ ui_nav_size: uiNavSizeSelect.value });
+    await updateSettings(
+      buildManualUiPayload({ ui_nav_size: uiNavSizeSelect.value }),
+    );
     if (typeof window.applyUiNavSize === "function") {
       window.applyUiNavSize(uiNavSizeSelect.value);
     }
@@ -545,7 +685,9 @@ async function saveUiNavSize() {
 async function saveUiTableDensity() {
   if (!uiTableDensitySelect) return;
   try {
-    await updateSettings({ ui_table_density: uiTableDensitySelect.value });
+    await updateSettings(
+      buildManualUiPayload({ ui_table_density: uiTableDensitySelect.value }),
+    );
     if (typeof window.applyUiTableDensity === "function") {
       window.applyUiTableDensity(uiTableDensitySelect.value);
     }
@@ -558,13 +700,110 @@ async function saveUiTableDensity() {
 async function saveUiBackground() {
   if (!uiBackgroundSelect) return;
   try {
-    await updateSettings({ ui_background: uiBackgroundSelect.value });
+    await updateSettings(
+      buildManualUiPayload({ ui_background: uiBackgroundSelect.value }),
+    );
     if (typeof window.applyUiBackground === "function") {
       window.applyUiBackground(uiBackgroundSelect.value);
     }
     showToast("Background effects saved");
   } catch (e) {
     showToast("Failed to save background effects: " + e.message);
+  }
+}
+
+async function applyUiPreset() {
+  if (!uiPresetSelect) return;
+  const preset = uiPresetSelect.value || "custom";
+  try {
+    if (preset === "custom") {
+      await updateSettings({ ui_preset: "custom" });
+      showToast("Theme preset set to custom");
+      return;
+    }
+    const values = UI_PRESETS[preset];
+    if (!values) return;
+    applyUiPresetValues(values);
+    await updateSettings(Object.assign({ ui_preset: preset }, values));
+    showToast("Theme preset applied");
+  } catch (e) {
+    showToast("Failed to apply theme preset: " + e.message);
+  }
+}
+
+async function saveDownloadAdvancedSettings() {
+  try {
+    await updateSettings({
+      bandwidth_limit_kbps: bandwidthLimitInput?.value || "0",
+      provider_fallback_order: providerFallbackOrderInput?.value || "",
+    });
+    showToast("Download rules saved");
+  } catch (e) {
+    showToast("Failed to save download rules: " + e.message);
+  }
+}
+
+async function saveDiskGuardSettings() {
+  try {
+    await updateSettings({
+      disk_warn_gb: diskWarnGbInput?.value || "8",
+      disk_warn_percent: diskWarnPercentInput?.value || "12",
+    });
+    await loadSettings();
+    showToast("Disk guard thresholds saved");
+  } catch (e) {
+    showToast("Failed to save disk guard thresholds: " + e.message);
+  }
+}
+
+async function saveLibraryAutoRepair() {
+  try {
+    await updateSettings({
+      library_auto_repair: libraryAutoRepairCb?.checked || false,
+    });
+    showToast(
+      "Library auto-repair " +
+        (libraryAutoRepairCb?.checked ? "enabled" : "disabled"),
+    );
+  } catch (e) {
+    showToast("Failed to save library auto-repair: " + e.message);
+  }
+}
+
+function exportBackup() {
+  window.location.href = "/api/backup/export";
+}
+
+async function importBackup() {
+  const file = backupImportFileInput?.files?.[0];
+  if (!file) {
+    showToast("Choose a backup file first");
+    return;
+  }
+  if (!confirm("Import this backup into the current downloader data?")) return;
+  const formData = new FormData();
+  formData.append("backup", file);
+  try {
+    const resp = await fetch("/api/backup/import", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) {
+      showToast(data.error || "Backup import failed");
+      return;
+    }
+    if (backupImportFileInput) backupImportFileInput.value = "";
+    await Promise.all([loadSettings(), loadCustomPaths()]);
+    if (typeof loadUsers === "function" && userTableBody) {
+      loadUsers();
+    }
+    if (window.LiveUpdates && typeof window.LiveUpdates.refresh === "function") {
+      window.LiveUpdates.refresh(["settings", "library", "dashboard", "nav"]);
+    }
+    showToast("Backup imported");
+  } catch (e) {
+    showToast("Failed to import backup: " + e.message);
   }
 }
 

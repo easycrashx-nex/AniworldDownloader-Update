@@ -1023,9 +1023,36 @@ CREATE TABLE IF NOT EXISTS series_meta_cache (
     description TEXT,
     release_year TEXT,
     genres_json TEXT,
+    last_downloaded_at TEXT,
+    last_synced_at TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
+
+_CREATE_PROVIDER_SCORE_HISTORY_TABLE = """\
+CREATE TABLE IF NOT EXISTS provider_score_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    snapshot_at TEXT NOT NULL DEFAULT (datetime('now')),
+    health TEXT NOT NULL,
+    score INTEGER NOT NULL DEFAULT 0,
+    success_rate INTEGER NOT NULL DEFAULT 0,
+    completed INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    cancelled INTEGER NOT NULL DEFAULT 0,
+    running INTEGER NOT NULL DEFAULT 0,
+    queued INTEGER NOT NULL DEFAULT 0,
+    failed_24h INTEGER NOT NULL DEFAULT 0,
+    episodes INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+_CREATE_PROVIDER_SCORE_HISTORY_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_provider_score_history_provider_time "
+    "ON provider_score_history (provider, snapshot_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_provider_score_history_snapshot_at "
+    "ON provider_score_history (snapshot_at DESC)",
+)
 
 _CREATE_SEARCH_HISTORY_TABLE = """\
 CREATE TABLE IF NOT EXISTS search_history (
@@ -1188,6 +1215,27 @@ def init_series_meta_db():
     conn = get_db()
     try:
         conn.execute(_CREATE_SERIES_META_TABLE)
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(series_meta_cache)")
+        }
+        if "last_downloaded_at" not in columns:
+            conn.execute(
+                "ALTER TABLE series_meta_cache ADD COLUMN last_downloaded_at TEXT"
+            )
+        if "last_synced_at" not in columns:
+            conn.execute("ALTER TABLE series_meta_cache ADD COLUMN last_synced_at TEXT")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init_provider_score_history_db():
+    ANIWORLD_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    conn = get_db()
+    try:
+        conn.execute(_CREATE_PROVIDER_SCORE_HISTORY_TABLE)
+        for stmt in _CREATE_PROVIDER_SCORE_HISTORY_INDEXES:
+            conn.execute(stmt)
         conn.commit()
     finally:
         conn.close()
@@ -1302,6 +1350,8 @@ def upsert_series_meta(
     description=None,
     release_year=None,
     genres=None,
+    last_downloaded_at=None,
+    last_synced_at=None,
 ):
     import json
 
@@ -1310,16 +1360,66 @@ def upsert_series_meta(
     try:
         conn.execute(
             "INSERT INTO series_meta_cache "
-            "(series_url, title, poster_url, description, release_year, genres_json, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, datetime('now')) "
+            "("
+            "series_url, title, poster_url, description, release_year, genres_json, "
+            "last_downloaded_at, last_synced_at, updated_at"
+            ") "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now')) "
             "ON CONFLICT(series_url) DO UPDATE SET "
             "title = COALESCE(excluded.title, series_meta_cache.title), "
             "poster_url = COALESCE(excluded.poster_url, series_meta_cache.poster_url), "
             "description = COALESCE(excluded.description, series_meta_cache.description), "
             "release_year = COALESCE(excluded.release_year, series_meta_cache.release_year), "
             "genres_json = COALESCE(excluded.genres_json, series_meta_cache.genres_json), "
+            "last_downloaded_at = COALESCE(excluded.last_downloaded_at, series_meta_cache.last_downloaded_at), "
+            "last_synced_at = COALESCE(excluded.last_synced_at, series_meta_cache.last_synced_at), "
             "updated_at = datetime('now')",
-            (series_url, title, poster_url, description, release_year, genres_json),
+            (
+                series_url,
+                title,
+                poster_url,
+                description,
+                release_year,
+                genres_json,
+                last_downloaded_at,
+                last_synced_at,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def touch_series_last_downloaded(series_url):
+    if not str(series_url or "").strip():
+        return
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO series_meta_cache (series_url, last_downloaded_at, updated_at) "
+            "VALUES (?, datetime('now'), datetime('now')) "
+            "ON CONFLICT(series_url) DO UPDATE SET "
+            "last_downloaded_at = datetime('now'), "
+            "updated_at = datetime('now')",
+            (series_url,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def touch_series_last_synced(series_url):
+    if not str(series_url or "").strip():
+        return
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO series_meta_cache (series_url, last_synced_at, updated_at) "
+            "VALUES (?, datetime('now'), datetime('now')) "
+            "ON CONFLICT(series_url) DO UPDATE SET "
+            "last_synced_at = datetime('now'), "
+            "updated_at = datetime('now')",
+            (series_url,),
         )
         conn.commit()
     finally:
@@ -1781,6 +1881,72 @@ def get_provider_health(username=None):
         conn.close()
 
 
+def snapshot_provider_score_history(items, minimum_interval_minutes=30):
+    rows = [dict(item) for item in (items or []) if item.get("provider")]
+    if not rows:
+        return 0
+    conn = get_db()
+    try:
+        latest = conn.execute(
+            "SELECT MAX(snapshot_at) AS latest FROM provider_score_history"
+        ).fetchone()["latest"]
+        if latest:
+            diff_minutes = conn.execute(
+                "SELECT CAST((julianday('now') - julianday(?)) * 24 * 60 AS INTEGER) AS diff",
+                (latest,),
+            ).fetchone()["diff"]
+            if diff_minutes is not None and int(diff_minutes) < int(
+                minimum_interval_minutes
+            ):
+                return 0
+
+        for item in rows:
+            conn.execute(
+                "INSERT INTO provider_score_history ("
+                "provider, health, score, success_rate, completed, failed, cancelled, "
+                "running, queued, failed_24h, episodes"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    item.get("provider"),
+                    item.get("health") or "idle",
+                    int(item.get("score") or 0),
+                    int(item.get("success_rate") or 0),
+                    int(item.get("completed") or 0),
+                    int(item.get("failed") or 0),
+                    int(item.get("cancelled") or 0),
+                    int(item.get("running") or 0),
+                    int(item.get("queued") or 0),
+                    int(item.get("failed_24h") or 0),
+                    int(item.get("episodes") or 0),
+                ),
+            )
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def get_provider_score_history(hours=168):
+    hours = max(1, min(int(hours or 168), 24 * 30))
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT provider, snapshot_at, health, score, success_rate, completed, failed, "
+            "running, queued, failed_24h, episodes "
+            "FROM provider_score_history "
+            "WHERE snapshot_at >= datetime('now', ?) "
+            "ORDER BY snapshot_at ASC, provider ASC",
+            (f"-{hours} hours",),
+        ).fetchall()
+        grouped = {}
+        for row in rows:
+            item = dict(row)
+            grouped.setdefault(item["provider"], []).append(item)
+        return grouped
+    finally:
+        conn.close()
+
+
 def get_activity_chart(days=7, username=None):
     from datetime import datetime, timedelta
 
@@ -1882,5 +2048,73 @@ def retry_failed_queue_items(provider_overrides=None):
         _rebalance_queued_positions(conn)
         conn.commit()
         return created
+    finally:
+        conn.close()
+
+
+def export_app_state():
+    tables = [
+        "custom_paths",
+        "favorites",
+        "autosync_jobs",
+        "series_meta_cache",
+        "search_history",
+        "user_preferences",
+        "download_stats_archive",
+        "provider_score_history",
+    ]
+    conn = get_db()
+    try:
+        state = {}
+        for table in tables:
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+            state[table] = [dict(row) for row in rows]
+        return state
+    finally:
+        conn.close()
+
+
+def import_app_state(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid backup payload")
+
+    allowed_tables = {
+        "custom_paths",
+        "favorites",
+        "autosync_jobs",
+        "series_meta_cache",
+        "search_history",
+        "user_preferences",
+        "download_stats_archive",
+        "provider_score_history",
+    }
+    conn = get_db()
+    try:
+        counts = {}
+        for table, rows in payload.items():
+            if table not in allowed_tables:
+                continue
+            if not isinstance(rows, list):
+                continue
+            columns = [
+                row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            ]
+            if not columns:
+                continue
+            placeholders = ", ".join(["?"] * len(columns))
+            column_sql = ", ".join(columns)
+            imported = 0
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                values = [row.get(column) for column in columns]
+                conn.execute(
+                    f"INSERT OR REPLACE INTO {table} ({column_sql}) VALUES ({placeholders})",
+                    values,
+                )
+                imported += 1
+            counts[table] = imported
+        conn.commit()
+        return counts
     finally:
         conn.close()

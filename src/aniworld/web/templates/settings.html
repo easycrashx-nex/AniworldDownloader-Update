@@ -226,6 +226,16 @@
     <h2>UI Settings</h2>
     <div class="settings-row" style="gap: 10px; flex-wrap: wrap">
       <div class="settings-field">
+        <label class="field-label">Theme Preset</label>
+        <select id="uiPreset" onchange="applyUiPreset()" class="sync-select">
+          <option value="custom">Custom</option>
+          <option value="control">Control Center</option>
+          <option value="cinematic">Cinematic</option>
+          <option value="frosted">Frosted</option>
+          <option value="neon">Neon</option>
+        </select>
+      </div>
+      <div class="settings-field">
         <label class="field-label">Density</label>
         <select id="uiMode" onchange="saveUiMode()" class="sync-select">
           <option value="airy">Airy</option>
@@ -514,6 +524,32 @@
       Changes take effect immediately for new downloads.
     </div>
 
+    <div class="settings-row" style="gap: 10px; flex-wrap: wrap">
+      <div class="settings-field">
+        <label class="field-label">Bandwidth Limit (KB/s)</label>
+        <input
+          type="number"
+          id="bandwidthLimit"
+          min="0"
+          max="250000"
+          placeholder="0 = unlimited"
+        />
+      </div>
+      <div class="settings-field settings-field-wide">
+        <label class="field-label">Provider Fallback Order</label>
+        <input
+          type="text"
+          id="providerFallbackOrder"
+          placeholder="VOE, Filemoon, Doodstream"
+        />
+      </div>
+      <button onclick="saveDownloadAdvancedSettings()">Save Download Rules</button>
+    </div>
+    <div class="settings-hint">
+      Bandwidth limiting is a soft ffmpeg cap. Provider fallback order controls
+      which hosts are preferred first when the current provider fails.
+    </div>
+
     <label class="settings-checkbox">
       <input
         type="checkbox"
@@ -538,6 +574,60 @@
     <div class="settings-hint">
       When enabled, English Sub is hidden from the language selector and cannot
       be queued.
+    </div>
+
+    <label class="settings-checkbox">
+      <input
+        type="checkbox"
+        id="libraryAutoRepair"
+        onchange="saveLibraryAutoRepair()"
+      />
+      Enable missing episode auto-repair on compare refresh
+    </label>
+    <div class="settings-hint">
+      When enabled, a manual source compare refresh can automatically queue
+      missing episodes using your default sync language and provider.
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h2>Disk Space Guard</h2>
+    <div class="settings-row" style="gap: 10px; flex-wrap: wrap">
+      <div class="settings-field">
+        <label class="field-label">Warn Below Free GB</label>
+        <input type="number" id="diskWarnGb" min="0" max="5000" step="0.5" />
+      </div>
+      <div class="settings-field">
+        <label class="field-label">Warn Below Free %</label>
+        <input
+          type="number"
+          id="diskWarnPercent"
+          min="0"
+          max="100"
+          step="0.5"
+        />
+      </div>
+      <button onclick="saveDiskGuardSettings()">Save Guard Thresholds</button>
+    </div>
+    <div class="settings-hint">
+      Disk guard is used across Stats, Settings, and Diagnostics to warn before
+      downloads start failing.
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h2>Backup & Restore</h2>
+    <div class="settings-row" style="gap: 10px; flex-wrap: wrap">
+      <button type="button" onclick="exportBackup()">Export Backup</button>
+      <input type="file" id="backupImportFile" accept="application/json" />
+      <button type="button" class="btn-secondary" onclick="importBackup()">
+        Import Backup
+      </button>
+    </div>
+    <div class="settings-hint">
+      Exports settings, favorites, Auto-Sync jobs, search history, series
+      metadata, and archived stats. Import merges the backup into the current
+      database.
     </div>
   </div>
 </div>

@@ -1798,6 +1798,14 @@ h1 {
   margin-top: 8px;
 }
 
+.library-missing-heading {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .library-missing-list {
   display: flex;
   flex-wrap: wrap;
@@ -1923,6 +1931,71 @@ h1 {
 .provider-health-card {
   display: grid;
   gap: 12px;
+}
+
+.provider-history-list,
+.diagnostics-list {
+  display: grid;
+  gap: 12px;
+}
+
+.provider-history-card,
+.diagnostics-card,
+.diagnostics-list-item {
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.provider-history-card {
+  display: grid;
+  gap: 12px;
+}
+
+.provider-history-head,
+.provider-history-foot,
+.diagnostics-list-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.provider-history-head span,
+.provider-history-meta,
+.provider-history-foot,
+.diagnostics-inline-note,
+.diagnostics-list-item span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.provider-history-meta {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.provider-history-bars {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  min-height: 92px;
+  padding: 8px 0 2px;
+}
+
+.provider-history-bar {
+  width: 100%;
+  min-width: 12px;
+  flex: 1;
+  border-radius: 999px 999px 6px 6px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--blue) 100%, #ffffff 8%),
+    color-mix(in srgb, var(--blue) 62%, rgba(0, 0, 0, 0.08))
+  );
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent);
 }
 
 .provider-health-rank {
@@ -2216,6 +2289,36 @@ h1 {
 .library-issue-duplicate {
   background: rgba(255, 138, 138, 0.14);
   color: var(--danger);
+}
+
+.library-title-supporting {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.77rem;
+}
+
+.diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.diagnostics-card {
+  display: grid;
+  gap: 6px;
+}
+
+.diagnostics-list-item strong {
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.settings-field-wide {
+  flex: 1 1 360px;
+  min-width: min(100%, 360px);
 }
 
 .library-issue-source-missing {

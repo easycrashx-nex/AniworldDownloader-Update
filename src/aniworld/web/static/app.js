@@ -56,6 +56,10 @@ const modalDescToggle = document.getElementById("modalDescToggle");
 const modalSiteBadge = document.getElementById("modalSiteBadge");
 const modalDetailsSource = document.getElementById("modalDetailsSource");
 const modalDetailsYear = document.getElementById("modalDetailsYear");
+const modalDetailsLastDownloaded = document.getElementById(
+  "modalDetailsLastDownloaded",
+);
+const modalDetailsLastSynced = document.getElementById("modalDetailsLastSynced");
 const modalQuickStats = document.getElementById("modalQuickStats");
 const modalSelectionSummary = document.getElementById("modalSelectionSummary");
 const autoSyncLabel = autoSyncCheck
@@ -2234,6 +2238,8 @@ async function openSeries(url) {
   renderModalGenres([]);
   if (modalYear) modalYear.textContent = "";
   if (modalDetailsYear) modalDetailsYear.textContent = "";
+  if (modalDetailsLastDownloaded) modalDetailsLastDownloaded.textContent = "Never";
+  if (modalDetailsLastSynced) modalDetailsLastSynced.textContent = "Never";
   if (modalSiteBadge) modalSiteBadge.textContent = getSiteLabel(sourceSite);
   if (modalDetailsSource) modalDetailsSource.textContent = getSiteLabel(sourceSite);
   modalDescriptionExpanded = false;
@@ -2270,6 +2276,16 @@ async function openSeries(url) {
     renderModalGenres(seriesData.genres || []);
     if (modalYear) modalYear.textContent = seriesData.release_year || "";
     if (modalDetailsYear) modalDetailsYear.textContent = seriesData.release_year || "Unknown";
+    if (modalDetailsLastDownloaded) {
+      modalDetailsLastDownloaded.textContent = seriesData.last_downloaded_at
+        ? formatRelativeDate(seriesData.last_downloaded_at)
+        : "Never";
+    }
+    if (modalDetailsLastSynced) {
+      modalDetailsLastSynced.textContent = seriesData.last_synced_at
+        ? formatRelativeDate(seriesData.last_synced_at)
+        : "Never";
+    }
     renderModalDescription(seriesData.description || "");
     if (seriesData.is_favorite) {
       favoriteMap.set(currentSeriesUrl, {
@@ -2701,6 +2717,8 @@ function closeModal() {
   renderModalGenres([]);
   if (modalYear) modalYear.textContent = "";
   if (modalDetailsYear) modalDetailsYear.textContent = "";
+  if (modalDetailsLastDownloaded) modalDetailsLastDownloaded.textContent = "Never";
+  if (modalDetailsLastSynced) modalDetailsLastSynced.textContent = "Never";
   if (modalSiteBadge) modalSiteBadge.textContent = getSiteLabel(currentSite);
   if (modalDetailsSource) modalDetailsSource.textContent = getSiteLabel(currentSite);
   syncDownloadAllLangsVisibility();
