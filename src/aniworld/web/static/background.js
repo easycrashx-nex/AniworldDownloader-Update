@@ -12,6 +12,204 @@
     "(prefers-reduced-motion: reduce)",
   ).matches;
 
+  const BACKGROUND_PROFILES = {
+    dynamic: {
+      motionFactor: 0.18,
+      areaFactor: 26000,
+      minPoints: 36,
+      maxPoints: 96,
+      maxDistance: 165,
+      canvasOpacity: 0.85,
+      edgeAlpha: 0.42,
+      edgeColor: "130, 205, 255",
+      pointRadius: 1.8,
+      pointColor: "rgba(166, 223, 255, 0.9)",
+      highlightColor: "rgba(120, 235, 220, 0.95)",
+    },
+    cinematic: {
+      motionFactor: 0.24,
+      areaFactor: 22000,
+      minPoints: 42,
+      maxPoints: 116,
+      maxDistance: 192,
+      canvasOpacity: 1,
+      edgeAlpha: 0.58,
+      edgeColor: "186, 233, 255",
+      pointRadius: 2.1,
+      pointColor: "rgba(196, 238, 255, 0.96)",
+      highlightColor: "rgba(124, 240, 226, 0.98)",
+    },
+    subtle: {
+      motionFactor: 0.07,
+      areaFactor: 34000,
+      minPoints: 20,
+      maxPoints: 54,
+      maxDistance: 138,
+      canvasOpacity: 0.46,
+      edgeAlpha: 0.22,
+      edgeColor: "138, 204, 244",
+      pointRadius: 1.4,
+      pointColor: "rgba(166, 223, 255, 0.62)",
+      highlightColor: "rgba(122, 232, 216, 0.84)",
+    },
+    minimal: {
+      motionFactor: 0.04,
+      areaFactor: 42000,
+      minPoints: 14,
+      maxPoints: 34,
+      maxDistance: 124,
+      canvasOpacity: 0.22,
+      edgeAlpha: 0.1,
+      edgeColor: "124, 196, 238",
+      pointRadius: 1.2,
+      pointColor: "rgba(166, 223, 255, 0.28)",
+      highlightColor: "rgba(122, 232, 216, 0.58)",
+    },
+    aurora: {
+      motionFactor: 0.16,
+      areaFactor: 24000,
+      minPoints: 40,
+      maxPoints: 104,
+      maxDistance: 178,
+      canvasOpacity: 0.92,
+      edgeAlpha: 0.48,
+      edgeColor: "126, 245, 215",
+      pointRadius: 1.95,
+      pointColor: "rgba(168, 255, 228, 0.88)",
+      highlightColor: "rgba(101, 255, 214, 0.98)",
+    },
+    nebula: {
+      motionFactor: 0.13,
+      areaFactor: 25000,
+      minPoints: 32,
+      maxPoints: 82,
+      maxDistance: 184,
+      canvasOpacity: 0.76,
+      edgeAlpha: 0.38,
+      edgeColor: "214, 154, 255",
+      pointRadius: 1.75,
+      pointColor: "rgba(230, 188, 255, 0.76)",
+      highlightColor: "rgba(255, 202, 250, 0.94)",
+    },
+    frost: {
+      motionFactor: 0.08,
+      areaFactor: 36000,
+      minPoints: 18,
+      maxPoints: 44,
+      maxDistance: 132,
+      canvasOpacity: 0.34,
+      edgeAlpha: 0.14,
+      edgeColor: "214, 244, 255",
+      pointRadius: 1.2,
+      pointColor: "rgba(224, 246, 255, 0.44)",
+      highlightColor: "rgba(193, 245, 255, 0.84)",
+    },
+    ember: {
+      motionFactor: 0.15,
+      areaFactor: 27000,
+      minPoints: 34,
+      maxPoints: 92,
+      maxDistance: 158,
+      canvasOpacity: 0.78,
+      edgeAlpha: 0.36,
+      edgeColor: "255, 178, 112",
+      pointRadius: 1.7,
+      pointColor: "rgba(255, 196, 138, 0.82)",
+      highlightColor: "rgba(255, 224, 160, 0.96)",
+    },
+    grid: {
+      motionFactor: 0.05,
+      areaFactor: 32000,
+      minPoints: 22,
+      maxPoints: 48,
+      maxDistance: 142,
+      canvasOpacity: 0.28,
+      edgeAlpha: 0.12,
+      edgeColor: "110, 214, 255",
+      pointRadius: 1.25,
+      pointColor: "rgba(140, 224, 255, 0.34)",
+      highlightColor: "rgba(104, 240, 255, 0.72)",
+    },
+    pulse: {
+      motionFactor: 0.22,
+      areaFactor: 23000,
+      minPoints: 38,
+      maxPoints: 108,
+      maxDistance: 172,
+      canvasOpacity: 0.9,
+      edgeAlpha: 0.5,
+      edgeColor: "98, 225, 255",
+      pointRadius: 2,
+      pointColor: "rgba(148, 233, 255, 0.94)",
+      highlightColor: "rgba(122, 255, 243, 1)",
+    },
+    drift: {
+      motionFactor: 0.09,
+      areaFactor: 33000,
+      minPoints: 20,
+      maxPoints: 56,
+      maxDistance: 150,
+      canvasOpacity: 0.4,
+      edgeAlpha: 0.18,
+      edgeColor: "168, 212, 248",
+      pointRadius: 1.3,
+      pointColor: "rgba(186, 225, 255, 0.5)",
+      highlightColor: "rgba(153, 243, 231, 0.82)",
+    },
+    storm: {
+      motionFactor: 0.26,
+      areaFactor: 21000,
+      minPoints: 44,
+      maxPoints: 118,
+      maxDistance: 190,
+      canvasOpacity: 0.96,
+      edgeAlpha: 0.56,
+      edgeColor: "166, 217, 255",
+      pointRadius: 2,
+      pointColor: "rgba(208, 241, 255, 0.98)",
+      highlightColor: "rgba(171, 255, 238, 1)",
+    },
+    dusk: {
+      motionFactor: 0.11,
+      areaFactor: 30000,
+      minPoints: 26,
+      maxPoints: 70,
+      maxDistance: 162,
+      canvasOpacity: 0.58,
+      edgeAlpha: 0.26,
+      edgeColor: "255, 181, 160",
+      pointRadius: 1.45,
+      pointColor: "rgba(255, 208, 189, 0.58)",
+      highlightColor: "rgba(255, 233, 198, 0.9)",
+    },
+    bloom: {
+      motionFactor: 0.17,
+      areaFactor: 25000,
+      minPoints: 36,
+      maxPoints: 98,
+      maxDistance: 168,
+      canvasOpacity: 0.82,
+      edgeAlpha: 0.44,
+      edgeColor: "255, 186, 222",
+      pointRadius: 1.85,
+      pointColor: "rgba(255, 205, 229, 0.82)",
+      highlightColor: "rgba(255, 225, 240, 0.98)",
+    },
+    off: {
+      motionFactor: 0,
+      areaFactor: 42000,
+      minPoints: 0,
+      maxPoints: 0,
+      maxDistance: 0,
+      canvasOpacity: 0,
+      edgeAlpha: 0,
+      edgeColor: "130, 205, 255",
+      pointRadius: 0,
+      pointColor: "rgba(0, 0, 0, 0)",
+      highlightColor: "rgba(0, 0, 0, 0)",
+    },
+  };
+
   let width = 0;
   let height = 0;
   let points = [];
@@ -22,23 +220,31 @@
 
   function getBackgroundMode() {
     const mode = document.body?.dataset?.uiBackground || "dynamic";
-    return mode === "subtle" || mode === "off" ? mode : "dynamic";
+    return BACKGROUND_PROFILES[mode] ? mode : "dynamic";
+  }
+
+  function getBackgroundProfile() {
+    return BACKGROUND_PROFILES[getBackgroundMode()] || BACKGROUND_PROFILES.dynamic;
+  }
+
+  function getMotionSpeedMultiplier() {
+    const mode = document.body?.dataset?.uiMotion || "normal";
+    if (mode === "slow") return 0.74;
+    if (mode === "fast") return 1.32;
+    return 1;
   }
 
   function getMotionFactor() {
-    const mode = getBackgroundMode();
-    if (prefersReducedMotion || mode === "off") return 0;
-    return mode === "subtle" ? 0.07 : 0.18;
+    if (prefersReducedMotion) return 0;
+    return getBackgroundProfile().motionFactor;
   }
 
   function pointCountForViewport() {
-    const mode = getBackgroundMode();
-    const areaFactor = mode === "subtle" ? 34000 : 26000;
-    const minPoints = mode === "subtle" ? 20 : 36;
-    const maxPoints = mode === "subtle" ? 54 : 96;
+    const profile = getBackgroundProfile();
+    if (profile.maxPoints <= 0) return 0;
     return Math.max(
-      minPoints,
-      Math.min(maxPoints, Math.round((width * height) / areaFactor)),
+      profile.minPoints,
+      Math.min(profile.maxPoints, Math.round((width * height) / profile.areaFactor)),
     );
   }
 
@@ -70,12 +276,13 @@
   }
 
   function updatePoints() {
-    const mode = getBackgroundMode();
-    if (prefersReducedMotion || mode === "off") return;
+    const profile = getBackgroundProfile();
+    if (prefersReducedMotion || getBackgroundMode() === "off") return;
+    const speedMultiplier = getMotionSpeedMultiplier();
 
     for (const point of points) {
-      point.x += point.vx;
-      point.y += point.vy;
+      point.x += point.vx * speedMultiplier;
+      point.y += point.vy * speedMultiplier;
 
       if (point.x <= 0 || point.x >= width) point.vx *= -1;
       if (point.y <= 0 || point.y >= height) point.vy *= -1;
@@ -90,16 +297,18 @@
       const distSq = dx * dx + dy * dy;
       if (distSq > 0 && distSq < 110 * 110) {
         const force = (110 * 110 - distSq) / (110 * 110);
-        point.x += (dx / Math.sqrt(distSq)) * force * 0.8;
-        point.y += (dy / Math.sqrt(distSq)) * force * 0.8;
+        const distance = Math.sqrt(distSq);
+        point.x += (dx / distance) * force * 0.8 * speedMultiplier;
+        point.y += (dy / distance) * force * 0.8 * speedMultiplier;
       }
     }
+
+    if (profile.motionFactor <= 0) drawFrame();
   }
 
   function nearestConnections(index) {
     const current = points[index];
-    const mode = getBackgroundMode();
-    const maxDistance = mode === "subtle" ? 138 : 165;
+    const profile = getBackgroundProfile();
     const neighbors = [];
 
     for (let otherIndex = 0; otherIndex < points.length; otherIndex += 1) {
@@ -108,7 +317,7 @@
       const dx = other.x - current.x;
       const dy = other.y - current.y;
       const distance = Math.hypot(dx, dy);
-      if (distance <= maxDistance) {
+      if (distance <= profile.maxDistance) {
         neighbors.push({ index: otherIndex, distance });
       }
     }
@@ -119,7 +328,8 @@
 
   function drawFrame() {
     const mode = getBackgroundMode();
-    canvas.style.opacity = mode === "off" ? "0" : mode === "subtle" ? "0.46" : "0.85";
+    const profile = getBackgroundProfile();
+    canvas.style.opacity = String(profile.canvasOpacity);
     ctx.clearRect(0, 0, width, height);
     if (mode === "off") return;
 
@@ -139,14 +349,15 @@
         renderedEdges.add(edgeKey);
 
         const target = points[neighbor.index];
-        const alphaBase = mode === "subtle" ? 0.22 : 0.42;
-        const alpha = Math.max(0.04, 1 - neighbor.distance / 165) * alphaBase;
+        const alpha =
+          Math.max(0.04, 1 - neighbor.distance / profile.maxDistance) *
+          profile.edgeAlpha;
 
         ctx.beginPath();
         ctx.moveTo(point.x, point.y);
         ctx.lineTo(target.x, target.y);
-        ctx.strokeStyle = `rgba(130, 205, 255, ${alpha})`;
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = `rgba(${profile.edgeColor}, ${alpha})`;
+        ctx.lineWidth = mode === "storm" ? 1.15 : 1;
         ctx.stroke();
       }
     }
@@ -158,12 +369,14 @@
         Math.hypot(point.x - pointerX, point.y - pointerY) < 120;
 
       ctx.beginPath();
-      ctx.arc(point.x, point.y, highlight ? 2.2 : mode === "subtle" ? 1.4 : 1.8, 0, Math.PI * 2);
-      ctx.fillStyle = highlight
-        ? "rgba(120, 235, 220, 0.95)"
-        : mode === "subtle"
-          ? "rgba(166, 223, 255, 0.62)"
-          : "rgba(166, 223, 255, 0.9)";
+      ctx.arc(
+        point.x,
+        point.y,
+        highlight ? Math.max(2.1, profile.pointRadius + 0.3) : profile.pointRadius,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fillStyle = highlight ? profile.highlightColor : profile.pointColor;
       ctx.fill();
     }
   }
@@ -225,6 +438,9 @@
     { passive: true },
   );
   document.addEventListener("aniworld:ui-background", refreshBackgroundMode, {
+    passive: true,
+  });
+  document.addEventListener("aniworld:ui-motion", refreshBackgroundMode, {
     passive: true,
   });
 

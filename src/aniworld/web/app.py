@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import re
+import socket
 import threading
 import time
 from collections import deque
@@ -18,7 +19,7 @@ from flask import (
 )
 from flask_wtf.csrf import CSRFProtect
 
-from ..config import LANG_KEY_MAP, LANG_LABELS, SUPPORTED_PROVIDERS
+from ..config import LANG_KEY_MAP, LANG_LABELS, SUPPORTED_PROVIDERS, VERSION
 from ..extractors import provider_functions
 from ..logger import get_logger
 from ..providers import resolve_provider
@@ -74,7 +75,6 @@ from .db import (
     init_series_meta_db,
     init_user_preferences_db,
     is_queue_cancelled,
-    is_series_queued_or_running,
     list_favorites,
     list_series_meta,
     move_queue_item,
@@ -135,9 +135,133 @@ def _resolved_download_path_value():
     return str(Path.home() / "Downloads")
 
 
+def _discover_local_ipv4_addresses():
+    addresses = {"127.0.0.1"}
+
+    try:
+        hostname = socket.gethostname()
+        for result in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = result[4][0]
+            if ip and not ip.startswith("169.254."):
+                addresses.add(ip)
+    except OSError:
+        pass
+
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(("8.8.8.8", 80))
+        ip = probe.getsockname()[0]
+        if ip and not ip.startswith("169.254."):
+            addresses.add(ip)
+    except OSError:
+        pass
+    finally:
+        try:
+            probe.close()
+        except Exception:
+            pass
+
+    return sorted(addresses)
+
+
+def _server_network_info(app):
+    host = str(app.config.get("WEB_HOST", "127.0.0.1")).strip() or "127.0.0.1"
+    port = int(app.config.get("WEB_PORT", 8080))
+    is_local_only = host in {"127.0.0.1", "localhost"}
+    is_wildcard = host in {"0.0.0.0", "::"}
+
+    if is_local_only:
+        ip_addresses = ["127.0.0.1"]
+        access_urls = [f"http://localhost:{port}"]
+    elif is_wildcard:
+        ip_addresses = _discover_local_ipv4_addresses()
+        access_urls = [f"http://{ip}:{port}" for ip in ip_addresses]
+    else:
+        ip_addresses = [host]
+        access_urls = [f"http://{host}:{port}"]
+
+    return {
+        "server_bind_host": host,
+        "server_port": port,
+        "server_ips": ip_addresses,
+        "server_access_urls": access_urls,
+        "server_scope": "Local only" if is_local_only else "LAN / exposed",
+    }
+
+
 def _normalize_ui_scale(value):
     scale = str(value or "100").strip()
     return scale if scale in {"90", "95", "100", "105", "110"} else "100"
+
+
+def _normalize_ui_mode(value):
+    mode = str(value or "cozy").strip().lower()
+    return mode if mode in {"airy", "cozy", "compact", "tight"} else "cozy"
+
+
+def _normalize_ui_theme(value):
+    theme = str(value or "ocean").strip().lower()
+    return (
+        theme
+        if theme
+        in {
+            "ocean",
+            "mint",
+            "sunset",
+            "rose",
+            "arctic",
+            "forest",
+            "ember",
+            "amber",
+            "lavender",
+            "cobalt",
+            "coral",
+            "mono",
+            "electric",
+            "berry",
+            "midnight",
+            "jade",
+            "crimson",
+            "orchid",
+            "citrus",
+            "steel",
+            "sapphire",
+            "ruby",
+            "plum",
+            "sand",
+            "glacier",
+            "emerald",
+            "neon",
+            "peach",
+            "sky",
+            "bronze",
+            "pearl",
+            "slate",
+            "lemon",
+            "aqua",
+            "indigo",
+            "cherry",
+            "lilac",
+            "copper",
+            "lime",
+            "azure",
+            "magma",
+            "blush",
+            "pine",
+            "violet",
+        }
+        else "ocean"
+    )
+
+
+def _normalize_ui_radius(value):
+    radius = str(value or "soft").strip().lower()
+    return radius if radius in {"structured", "soft", "round"} else "soft"
+
+
+def _normalize_ui_motion(value):
+    motion = str(value or "normal").strip().lower()
+    return motion if motion in {"slow", "normal", "fast"} else "normal"
 
 
 def _normalize_ui_width(value):
@@ -145,18 +269,111 @@ def _normalize_ui_width(value):
     return width if width in {"standard", "wide"} else "standard"
 
 
+def _normalize_ui_modal_width(value):
+    width = str(value or "standard").strip().lower()
+    return width if width in {"compact", "standard", "wide"} else "standard"
+
+
+def _normalize_ui_nav_size(value):
+    size = str(value or "standard").strip().lower()
+    return size if size in {"compact", "standard", "large"} else "standard"
+
+
+def _normalize_ui_table_density(value):
+    density = str(value or "standard").strip().lower()
+    return density if density in {"compact", "standard", "relaxed"} else "standard"
+
+
 def _normalize_ui_background(value):
     background = str(value or "dynamic").strip().lower()
     return (
-        background if background in {"dynamic", "subtle", "off"} else "dynamic"
+        background
+        if background
+        in {
+            "dynamic",
+            "cinematic",
+            "subtle",
+            "minimal",
+            "aurora",
+            "nebula",
+            "frost",
+            "ember",
+            "grid",
+            "pulse",
+            "drift",
+            "storm",
+            "dusk",
+            "bloom",
+            "off",
+        }
+        else "dynamic"
     )
+
+
+def _normalize_pref_bool(value):
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return (
+        "1"
+        if str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+        else "0"
+    )
+
+
+def _normalize_search_default_sort(value):
+    sort = str(value or "source").strip().lower()
+    return (
+        sort
+        if sort in {"source", "year-desc", "year-asc", "title-asc", "title-desc"}
+        else "source"
+    )
+
+
+def _normalize_search_default_genres(value):
+    entries = []
+    seen = set()
+    for raw in str(value or "").split(","):
+        clean = re.sub(r"\s+", " ", raw).strip()
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(clean[:32])
+        if len(entries) >= 8:
+            break
+    return ", ".join(entries)
+
+
+def _normalize_search_default_year(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        year = int(raw)
+    except (TypeError, ValueError):
+        return ""
+    return str(year) if 1950 <= year <= 2099 else ""
 
 
 def _settings_payload(
     ui_mode="cozy",
     ui_scale="100",
+    ui_theme="ocean",
+    ui_radius="soft",
+    ui_motion="normal",
     ui_width="standard",
+    ui_modal_width="standard",
+    ui_nav_size="standard",
+    ui_table_density="standard",
     ui_background="dynamic",
+    search_default_sort="source",
+    search_default_genres="",
+    search_default_year_from="",
+    search_default_year_to="",
+    search_default_favorites_only="0",
+    search_default_downloaded_only="0",
 ):
     return {
         "download_path": _resolved_download_path_value(),
@@ -168,10 +385,34 @@ def _settings_payload(
         "sync_schedule": os.environ.get(_ENV_SYNC_SCHEDULE, "0"),
         "sync_language": os.environ.get(_ENV_SYNC_LANGUAGE, "German Dub"),
         "sync_provider": os.environ.get(_ENV_SYNC_PROVIDER, "VOE"),
-        "ui_mode": ui_mode or "cozy",
+        "ui_mode": _normalize_ui_mode(ui_mode),
         "ui_scale": _normalize_ui_scale(ui_scale),
+        "ui_theme": _normalize_ui_theme(ui_theme),
+        "ui_radius": _normalize_ui_radius(ui_radius),
+        "ui_motion": _normalize_ui_motion(ui_motion),
         "ui_width": _normalize_ui_width(ui_width),
+        "ui_modal_width": _normalize_ui_modal_width(ui_modal_width),
+        "ui_nav_size": _normalize_ui_nav_size(ui_nav_size),
+        "ui_table_density": _normalize_ui_table_density(ui_table_density),
         "ui_background": _normalize_ui_background(ui_background),
+        "search_default_sort": _normalize_search_default_sort(
+            search_default_sort
+        ),
+        "search_default_genres": _normalize_search_default_genres(
+            search_default_genres
+        ),
+        "search_default_year_from": _normalize_search_default_year(
+            search_default_year_from
+        ),
+        "search_default_year_to": _normalize_search_default_year(
+            search_default_year_to
+        ),
+        "search_default_favorites_only": _normalize_pref_bool(
+            search_default_favorites_only
+        ),
+        "search_default_downloaded_only": _normalize_pref_bool(
+            search_default_downloaded_only
+        ),
     }
 
 
@@ -749,6 +990,152 @@ def _get_provider_candidates_for_episode(ep_url, language, preferred=None, exclu
         return []
 
 
+def _ordered_language_labels(labels):
+    seen = set()
+    ordered = []
+    preferred = list(dict.fromkeys(LANG_LABELS.values()))
+    extras = []
+
+    for label in labels or []:
+        clean = str(label or "").strip()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        if clean in preferred:
+            continue
+        extras.append(clean)
+
+    for label in preferred:
+        if label in seen:
+            ordered.append(label)
+
+    ordered.extend(sorted(extras))
+    return ordered
+
+
+def _collect_autosync_provider_options(series_url, sample_limit=12):
+    provider_map = {}
+
+    def _merge(info):
+        for language, providers in (info or {}).items():
+            working = [name for name in providers if name in WORKING_PROVIDERS]
+            if not working:
+                continue
+            bucket = provider_map.setdefault(language, set())
+            bucket.update(working)
+
+    try:
+        prov = resolve_provider(series_url)
+    except Exception:
+        return {}
+
+    sampled = 0
+
+    try:
+        if prov.series_cls and prov.season_cls:
+            series = prov.series_cls(url=series_url)
+            for season_ref in list(getattr(series, "seasons", []) or []):
+                try:
+                    season_obj = prov.season_cls(url=season_ref.url, series=series)
+                except Exception:
+                    season_obj = season_ref
+                for episode in list(getattr(season_obj, "episodes", []) or []):
+                    try:
+                        _merge(_extract_provider_info(episode.provider_data))
+                    except Exception:
+                        continue
+                    sampled += 1
+                    if sampled >= sample_limit:
+                        break
+                if sampled >= sample_limit and provider_map:
+                    break
+        else:
+            episode = prov.episode_cls(url=series_url)
+            _merge(_extract_provider_info(episode.provider_data))
+    except Exception:
+        return {}
+
+    normalized = {}
+    for language, providers in provider_map.items():
+        ranked = _rank_provider_candidates(list(providers))
+        if ranked:
+            normalized[language] = ranked
+    return normalized
+
+
+def _providers_for_all_languages(provider_map):
+    provider_sets = [set(items or []) for items in provider_map.values() if items]
+    if not provider_sets:
+        return []
+
+    shared = set(provider_sets[0])
+    for provider_set in provider_sets[1:]:
+        shared &= provider_set
+
+    if shared:
+        return _rank_provider_candidates(list(shared))
+
+    merged = set()
+    for provider_set in provider_sets:
+        merged |= provider_set
+    return _rank_provider_candidates(list(merged))
+
+
+def _build_autosync_job_options(job):
+    current_language = str(job.get("language") or "German Dub").strip() or "German Dub"
+    current_provider = str(job.get("provider") or "VOE").strip() or "VOE"
+    detected_map = _collect_autosync_provider_options(job.get("series_url", ""))
+    providers_by_language = {key: list(value) for key, value in detected_map.items()}
+    detected = bool(providers_by_language)
+
+    if not providers_by_language:
+        fallback_language = (
+            current_language if current_language != "All Languages" else "German Dub"
+        )
+        fallback_provider = (
+            current_provider
+            if current_provider in WORKING_PROVIDERS
+            else (WORKING_PROVIDERS[0] if WORKING_PROVIDERS else "")
+        )
+        providers_by_language = {fallback_language: [fallback_provider] if fallback_provider else []}
+
+    languages = _ordered_language_labels(providers_by_language.keys())
+    allow_all_languages = (
+        (os.environ.get("ANIWORLD_LANG_SEPARATION", "0") == "1")
+        or current_language == "All Languages"
+    ) and len(languages) > 1
+    all_language_providers = (
+        _providers_for_all_languages(providers_by_language)
+        if allow_all_languages
+        else []
+    )
+
+    if current_language == "All Languages" and allow_all_languages:
+        selected_language = "All Languages"
+        selected_providers = all_language_providers
+    else:
+        selected_language = (
+            current_language if current_language in providers_by_language else languages[0]
+        )
+        selected_providers = providers_by_language.get(selected_language, [])
+
+    selected_provider = (
+        current_provider
+        if current_provider in selected_providers
+        else (selected_providers[0] if selected_providers else "")
+    )
+
+    return {
+        "detected": detected,
+        "languages": languages,
+        "providers_by_language": providers_by_language,
+        "allow_all_languages": allow_all_languages,
+        "all_language_providers": all_language_providers,
+        "selected_language": selected_language,
+        "selected_provider": selected_provider,
+    }
+
+
 def _pick_retry_provider(queue_item):
     try:
         episodes = json.loads(queue_item["episodes"] or "[]")
@@ -844,6 +1231,233 @@ def _get_cached_library_snapshot(include_meta=True):
         return cached
     snapshot = _scan_library_snapshot(include_meta=include_meta)
     return _cache_set(cache_key, snapshot)
+
+
+def _queue_episode_urls(queue_item):
+    try:
+        entries = json.loads(queue_item.get("episodes") or "[]")
+    except Exception:
+        entries = []
+    return [str(entry or "").strip() for entry in entries if str(entry or "").strip()]
+
+
+def _episode_label_from_url(url):
+    match = re.search(r"staffel-(\d+)/episode-(\d+)", str(url or ""), re.IGNORECASE)
+    if match:
+        return f"S{int(match.group(1)):02d}E{int(match.group(2)):03d}"
+    movie_match = re.search(r"filme/film-(\d+)", str(url or ""), re.IGNORECASE)
+    if movie_match:
+        return f"Movie {int(movie_match.group(1))}"
+    return str(url or "").strip()
+
+
+def _filter_conflicting_queue_episodes(series_url, language, episode_urls, exclude_queue_id=None):
+    requested = [
+        str(url or "").strip()
+        for url in (episode_urls or [])
+        if str(url or "").strip()
+    ]
+    requested_set = set(requested)
+    if not requested_set:
+        return {"episodes": [], "skipped": 0, "conflicts": []}
+
+    overlapping = set()
+    conflicts = []
+
+    for item in get_queue():
+        if exclude_queue_id and item.get("id") == exclude_queue_id:
+            continue
+        if item.get("status") not in {"queued", "running"}:
+            continue
+        if item.get("series_url") != series_url:
+            continue
+        if language and item.get("language") != language:
+            continue
+
+        item_episode_urls = set(_queue_episode_urls(item))
+        overlap = sorted(requested_set & item_episode_urls)
+        if not overlap:
+            continue
+
+        overlapping.update(overlap)
+        conflicts.append(
+            {
+                "queue_id": item.get("id"),
+                "status": item.get("status"),
+                "language": item.get("language"),
+                "provider": item.get("provider"),
+                "overlap_count": len(overlap),
+                "overlap": overlap[:8],
+                "overlap_labels": [_episode_label_from_url(url) for url in overlap[:8]],
+            }
+        )
+
+    filtered = [url for url in requested if url not in overlapping]
+    return {
+        "episodes": filtered,
+        "skipped": len(requested) - len(filtered),
+        "conflicts": conflicts,
+    }
+
+
+def _library_title_episode_index(title):
+    index = {}
+    total = 0
+    for season_key, episodes in (title.get("seasons") or {}).items():
+        season_number = str(season_key)
+        values = sorted(
+            {
+                int(item.get("episode"))
+                for item in (episodes or [])
+                if item.get("is_video", True) and item.get("episode")
+            }
+        )
+        if values:
+            index[season_number] = values
+            total += len(values)
+    return {"seasons": index, "total_episodes": total}
+
+
+def _get_cached_source_episode_index(series_url):
+    cache_key = f"library:source:{series_url}"
+    cached = _cache_get(cache_key, 180.0)
+    if cached is not None:
+        return cached
+
+    try:
+        prov = resolve_provider(series_url)
+        if not prov.series_cls or not prov.season_cls:
+            return _cache_set(
+                cache_key,
+                {"available": False, "reason": "unsupported", "source": getattr(prov, "name", "")},
+            )
+
+        series = prov.series_cls(url=series_url)
+        seasons = {}
+        total = 0
+        for season_ref in list(getattr(series, "seasons", []) or []):
+            season_obj = prov.season_cls(url=season_ref.url, series=series)
+            values = sorted(
+                {
+                    int(getattr(episode, "episode_number", 0))
+                    for episode in list(getattr(season_obj, "episodes", []) or [])
+                    if getattr(episode, "episode_number", 0)
+                }
+            )
+            if not values:
+                continue
+            season_number = str(getattr(season_obj, "season_number", 0) or 0)
+            seasons[season_number] = values
+            total += len(values)
+
+        return _cache_set(
+            cache_key,
+            {
+                "available": True,
+                "source": getattr(prov, "name", "") or "Source",
+                "season_count": len(seasons),
+                "total_episodes": total,
+                "seasons": seasons,
+            },
+        )
+    except Exception as exc:
+        logger.warning("Library compare failed for %s: %s", series_url, exc)
+        return _cache_set(
+            cache_key,
+            {"available": False, "reason": "error", "error": str(exc), "source": "Source"},
+        )
+
+
+def _compare_title_with_source(title):
+    series_url = str(title.get("series_url") or "").strip()
+    if not series_url:
+        return {"available": False, "reason": "unlinked"}
+
+    source_index = _get_cached_source_episode_index(series_url)
+    if not source_index.get("available"):
+        return source_index
+
+    local_index = _library_title_episode_index(title)
+    local_seasons = local_index["seasons"]
+    remote_seasons = source_index.get("seasons", {})
+    missing = []
+    extra = []
+
+    for season_key, remote_values in remote_seasons.items():
+        local_values = set(local_seasons.get(season_key, []))
+        remote_set = set(remote_values)
+        for episode_number in sorted(remote_set - local_values):
+            missing.append(f"S{int(season_key):02d}E{int(episode_number):03d}")
+
+    for season_key, local_values in local_seasons.items():
+        remote_values = set(remote_seasons.get(season_key, []))
+        local_set = set(local_values)
+        for episode_number in sorted(local_set - remote_values):
+            extra.append(f"S{int(season_key):02d}E{int(episode_number):03d}")
+
+    return {
+        "available": True,
+        "source": source_index.get("source") or "Source",
+        "season_count": source_index.get("season_count", 0),
+        "remote_total_episodes": source_index.get("total_episodes", 0),
+        "local_total_episodes": local_index.get("total_episodes", 0),
+        "missing_count": len(missing),
+        "extra_count": len(extra),
+        "missing_sample": missing[:8],
+        "extra_sample": extra[:6],
+        "in_sync": not missing,
+    }
+
+
+def _get_cached_library_compare(refresh=False):
+    cache_key = "library:compare"
+    if refresh:
+        _cache_invalidate(cache_key)
+    cached = _cache_get(cache_key, 120.0)
+    if cached is not None:
+        return cached
+
+    snapshot = _get_cached_library_snapshot(include_meta=True)
+    items = {}
+    summary = {
+        "compared": 0,
+        "in_sync": 0,
+        "out_of_sync": 0,
+        "titles_missing": 0,
+        "missing_episodes": 0,
+        "unavailable": 0,
+    }
+
+    seen_urls = set()
+    for location in snapshot.get("locations", []):
+        title_groups = []
+        if location.get("lang_folders"):
+            for lang_folder in location["lang_folders"]:
+                title_groups.extend(lang_folder.get("titles", []))
+        else:
+            title_groups.extend(location.get("titles", []))
+
+        for title in title_groups:
+            series_url = str(title.get("series_url") or "").strip()
+            if not series_url or series_url in seen_urls:
+                continue
+            seen_urls.add(series_url)
+            compare = _compare_title_with_source(title)
+            items[series_url] = compare
+
+            if compare.get("available"):
+                summary["compared"] += 1
+                if compare.get("missing_count", 0) > 0:
+                    summary["out_of_sync"] += 1
+                    summary["titles_missing"] += 1
+                    summary["missing_episodes"] += int(compare.get("missing_count", 0))
+                else:
+                    summary["in_sync"] += 1
+            else:
+                summary["unavailable"] += 1
+
+    payload = {"items": items, "summary": summary, "checked_at": int(time.time())}
+    return _cache_set(cache_key, payload)
 
 
 def _get_cached_stats_payload(username=None):
@@ -1142,20 +1756,34 @@ def _run_autosync_for_job(job):
                 total_episodes_found = lang_total_found
 
             if missing_episodes:
-                # Skip if series is already queued or running for THIS language
-                if is_series_queued_or_running(job["series_url"], language=target_lang):
+                conflict_guard = _filter_conflicting_queue_episodes(
+                    job["series_url"],
+                    target_lang,
+                    missing_episodes,
+                )
+                queueable_episodes = conflict_guard["episodes"]
+                if not queueable_episodes:
                     logger.info(
-                        "Auto-sync skipped '%s' (%s) - already queued/running",
+                        "Auto-sync skipped '%s' (%s) - all %d episode(s) already queued/running",
                         job["title"],
                         target_lang,
+                        len(missing_episodes),
                     )
                     continue
 
-                total_new_queued += len(missing_episodes)
+                if conflict_guard["skipped"]:
+                    logger.info(
+                        "Auto-sync trimmed %d conflicting episode(s) for '%s' (%s)",
+                        conflict_guard["skipped"],
+                        job["title"],
+                        target_lang,
+                    )
+
+                total_new_queued += len(queueable_episodes)
                 add_to_queue(
                     title=job["title"],
                     series_url=job["series_url"],
-                    episodes=missing_episodes,
+                    episodes=queueable_episodes,
                     language=target_lang,
                     provider=job["provider"],
                     username=job.get("added_by"),
@@ -1166,7 +1794,7 @@ def _run_autosync_for_job(job):
                 )
                 logger.info(
                     "Auto-sync queued %d episodes for '%s' (%s)",
-                    len(missing_episodes),
+                    len(queueable_episodes),
                     job["title"],
                     target_lang,
                 )
@@ -1248,12 +1876,7 @@ def _ensure_autosync_worker():
 
 
 def _get_version():
-    try:
-        from importlib.metadata import version
-
-        return version("aniworld")
-    except Exception:
-        return ""
+    return VERSION or ""
 
 
 def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
@@ -1344,11 +1967,55 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 "force_sso": app.config.get("FORCE_SSO", False),
                 "app_version": app_version,
                 "experimental_flags": _experimental_flags(),
-                "ui_mode": get_user_preference(username, "ui_mode", "cozy"),
+                "ui_mode": _normalize_ui_mode(
+                    get_user_preference(username, "ui_mode", "cozy")
+                ),
                 "ui_scale": get_user_preference(username, "ui_scale", "100"),
+                "ui_theme": _normalize_ui_theme(
+                    get_user_preference(username, "ui_theme", "ocean")
+                ),
+                "ui_radius": _normalize_ui_radius(
+                    get_user_preference(username, "ui_radius", "soft")
+                ),
+                "ui_motion": _normalize_ui_motion(
+                    get_user_preference(username, "ui_motion", "normal")
+                ),
                 "ui_width": get_user_preference(username, "ui_width", "standard"),
-                "ui_background": get_user_preference(
-                    username, "ui_background", "dynamic"
+                "ui_modal_width": _normalize_ui_modal_width(
+                    get_user_preference(username, "ui_modal_width", "standard")
+                ),
+                "ui_nav_size": _normalize_ui_nav_size(
+                    get_user_preference(username, "ui_nav_size", "standard")
+                ),
+                "ui_table_density": _normalize_ui_table_density(
+                    get_user_preference(
+                        username, "ui_table_density", "standard"
+                    )
+                ),
+                "ui_background": _normalize_ui_background(
+                    get_user_preference(username, "ui_background", "dynamic")
+                ),
+                "search_default_sort": _normalize_search_default_sort(
+                    get_user_preference(username, "search_default_sort", "source")
+                ),
+                "search_default_genres": _normalize_search_default_genres(
+                    get_user_preference(username, "search_default_genres", "")
+                ),
+                "search_default_year_from": _normalize_search_default_year(
+                    get_user_preference(username, "search_default_year_from", "")
+                ),
+                "search_default_year_to": _normalize_search_default_year(
+                    get_user_preference(username, "search_default_year_to", "")
+                ),
+                "search_default_favorites_only": _normalize_pref_bool(
+                    get_user_preference(
+                        username, "search_default_favorites_only", "0"
+                    )
+                ),
+                "search_default_downloaded_only": _normalize_pref_bool(
+                    get_user_preference(
+                        username, "search_default_downloaded_only", "0"
+                    )
                 ),
             }
     else:
@@ -1363,11 +2030,51 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 "force_sso": False,
                 "app_version": app_version,
                 "experimental_flags": _experimental_flags(),
-                "ui_mode": get_user_preference(None, "ui_mode", "cozy"),
+                "ui_mode": _normalize_ui_mode(
+                    get_user_preference(None, "ui_mode", "cozy")
+                ),
                 "ui_scale": get_user_preference(None, "ui_scale", "100"),
+                "ui_theme": _normalize_ui_theme(
+                    get_user_preference(None, "ui_theme", "ocean")
+                ),
+                "ui_radius": _normalize_ui_radius(
+                    get_user_preference(None, "ui_radius", "soft")
+                ),
+                "ui_motion": _normalize_ui_motion(
+                    get_user_preference(None, "ui_motion", "normal")
+                ),
                 "ui_width": get_user_preference(None, "ui_width", "standard"),
-                "ui_background": get_user_preference(
-                    None, "ui_background", "dynamic"
+                "ui_modal_width": _normalize_ui_modal_width(
+                    get_user_preference(None, "ui_modal_width", "standard")
+                ),
+                "ui_nav_size": _normalize_ui_nav_size(
+                    get_user_preference(None, "ui_nav_size", "standard")
+                ),
+                "ui_table_density": _normalize_ui_table_density(
+                    get_user_preference(None, "ui_table_density", "standard")
+                ),
+                "ui_background": _normalize_ui_background(
+                    get_user_preference(None, "ui_background", "dynamic")
+                ),
+                "search_default_sort": _normalize_search_default_sort(
+                    get_user_preference(None, "search_default_sort", "source")
+                ),
+                "search_default_genres": _normalize_search_default_genres(
+                    get_user_preference(None, "search_default_genres", "")
+                ),
+                "search_default_year_from": _normalize_search_default_year(
+                    get_user_preference(None, "search_default_year_from", "")
+                ),
+                "search_default_year_to": _normalize_search_default_year(
+                    get_user_preference(None, "search_default_year_to", "")
+                ),
+                "search_default_favorites_only": _normalize_pref_bool(
+                    get_user_preference(None, "search_default_favorites_only", "0")
+                ),
+                "search_default_downloaded_only": _normalize_pref_bool(
+                    get_user_preference(
+                        None, "search_default_downloaded_only", "0"
+                    )
                 ),
             }
 
@@ -1818,10 +2525,29 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
 
         custom_path_id = data.get("custom_path_id")
 
+        conflict_guard = _filter_conflicting_queue_episodes(
+            series_url,
+            language,
+            episodes,
+        )
+        queueable_episodes = conflict_guard["episodes"]
+        if not queueable_episodes:
+            return (
+                jsonify(
+                    {
+                        "error": "Selected episodes are already queued or currently downloading.",
+                        "type": "queue_conflict",
+                        "skipped_conflicts": conflict_guard["skipped"],
+                        "conflicts": conflict_guard["conflicts"],
+                    }
+                ),
+                409,
+            )
+
         queue_id = add_to_queue(
             title,
             series_url,
-            episodes,
+            queueable_episodes,
             language,
             provider,
             username,
@@ -1834,14 +2560,22 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             details={
                 "queue_id": queue_id,
                 "series_url": series_url,
-                "episodes": len(episodes),
+                "episodes": len(queueable_episodes),
                 "language": language,
                 "provider": provider,
                 "custom_path_id": custom_path_id,
+                "skipped_conflicts": conflict_guard["skipped"],
             },
         )
         _emit_ui_event("queue", "dashboard", "nav")
-        return jsonify({"queue_id": queue_id})
+        return jsonify(
+            {
+                "queue_id": queue_id,
+                "queued_episodes": len(queueable_episodes),
+                "skipped_conflicts": conflict_guard["skipped"],
+                "conflicts": conflict_guard["conflicts"],
+            }
+        )
 
     @app.route("/api/queue")
     def api_queue():
@@ -2135,18 +2869,58 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         username, _ = _get_current_user_info()
         ui_mode = get_user_preference(username, "ui_mode", "cozy")
         ui_scale = get_user_preference(username, "ui_scale", "100")
+        ui_theme = get_user_preference(username, "ui_theme", "ocean")
+        ui_radius = get_user_preference(username, "ui_radius", "soft")
+        ui_motion = get_user_preference(username, "ui_motion", "normal")
         ui_width = get_user_preference(username, "ui_width", "standard")
+        ui_modal_width = get_user_preference(
+            username, "ui_modal_width", "standard"
+        )
+        ui_nav_size = get_user_preference(username, "ui_nav_size", "standard")
+        ui_table_density = get_user_preference(
+            username, "ui_table_density", "standard"
+        )
         ui_background = get_user_preference(
             username, "ui_background", "dynamic"
         )
-        return jsonify(
-            _settings_payload(
-                ui_mode=ui_mode,
-                ui_scale=ui_scale,
-                ui_width=ui_width,
-                ui_background=ui_background,
-            )
+        search_default_sort = get_user_preference(
+            username, "search_default_sort", "source"
         )
+        search_default_genres = get_user_preference(
+            username, "search_default_genres", ""
+        )
+        search_default_year_from = get_user_preference(
+            username, "search_default_year_from", ""
+        )
+        search_default_year_to = get_user_preference(
+            username, "search_default_year_to", ""
+        )
+        search_default_favorites_only = get_user_preference(
+            username, "search_default_favorites_only", "0"
+        )
+        search_default_downloaded_only = get_user_preference(
+            username, "search_default_downloaded_only", "0"
+        )
+        payload = _settings_payload(
+            ui_mode=ui_mode,
+            ui_scale=ui_scale,
+            ui_theme=ui_theme,
+            ui_radius=ui_radius,
+            ui_motion=ui_motion,
+            ui_width=ui_width,
+            ui_modal_width=ui_modal_width,
+            ui_nav_size=ui_nav_size,
+            ui_table_density=ui_table_density,
+            ui_background=ui_background,
+            search_default_sort=search_default_sort,
+            search_default_genres=search_default_genres,
+            search_default_year_from=search_default_year_from,
+            search_default_year_to=search_default_year_to,
+            search_default_favorites_only=search_default_favorites_only,
+            search_default_downloaded_only=search_default_downloaded_only,
+        )
+        payload.update(_server_network_info(app))
+        return jsonify(payload)
 
     @app.route("/api/settings", methods=["PUT"])
     def api_settings_update():
@@ -2179,23 +2953,87 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             os.environ[_ENV_SYNC_PROVIDER] = prov
         username, _ = _get_current_user_info()
         if "ui_mode" in data:
-            ui_mode = str(data["ui_mode"]).strip().lower()
-            if ui_mode not in ("compact", "cozy"):
-                return jsonify({"error": f"Invalid ui_mode: {ui_mode}"}), 400
+            ui_mode = _normalize_ui_mode(data["ui_mode"])
             set_user_preference(username, "ui_mode", ui_mode)
         if "ui_scale" in data:
             set_user_preference(
                 username, "ui_scale", _normalize_ui_scale(data["ui_scale"])
             )
+        if "ui_theme" in data:
+            set_user_preference(
+                username, "ui_theme", _normalize_ui_theme(data["ui_theme"])
+            )
+        if "ui_radius" in data:
+            set_user_preference(
+                username, "ui_radius", _normalize_ui_radius(data["ui_radius"])
+            )
+        if "ui_motion" in data:
+            set_user_preference(
+                username, "ui_motion", _normalize_ui_motion(data["ui_motion"])
+            )
         if "ui_width" in data:
             set_user_preference(
                 username, "ui_width", _normalize_ui_width(data["ui_width"])
+            )
+        if "ui_modal_width" in data:
+            set_user_preference(
+                username,
+                "ui_modal_width",
+                _normalize_ui_modal_width(data["ui_modal_width"]),
+            )
+        if "ui_nav_size" in data:
+            set_user_preference(
+                username,
+                "ui_nav_size",
+                _normalize_ui_nav_size(data["ui_nav_size"]),
+            )
+        if "ui_table_density" in data:
+            set_user_preference(
+                username,
+                "ui_table_density",
+                _normalize_ui_table_density(data["ui_table_density"]),
             )
         if "ui_background" in data:
             set_user_preference(
                 username,
                 "ui_background",
                 _normalize_ui_background(data["ui_background"]),
+            )
+        if "search_default_sort" in data:
+            set_user_preference(
+                username,
+                "search_default_sort",
+                _normalize_search_default_sort(data["search_default_sort"]),
+            )
+        if "search_default_genres" in data:
+            set_user_preference(
+                username,
+                "search_default_genres",
+                _normalize_search_default_genres(data["search_default_genres"]),
+            )
+        if "search_default_year_from" in data:
+            set_user_preference(
+                username,
+                "search_default_year_from",
+                _normalize_search_default_year(data["search_default_year_from"]),
+            )
+        if "search_default_year_to" in data:
+            set_user_preference(
+                username,
+                "search_default_year_to",
+                _normalize_search_default_year(data["search_default_year_to"]),
+            )
+        if "search_default_favorites_only" in data:
+            set_user_preference(
+                username,
+                "search_default_favorites_only",
+                _normalize_pref_bool(data["search_default_favorites_only"]),
+            )
+        if "search_default_downloaded_only" in data:
+            set_user_preference(
+                username,
+                "search_default_downloaded_only",
+                _normalize_pref_bool(data["search_default_downloaded_only"]),
             )
         _record_user_event(
             "settings.updated",
@@ -2215,8 +3053,20 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                     "sync_provider",
                     "ui_mode",
                     "ui_scale",
+                    "ui_theme",
+                    "ui_radius",
+                    "ui_motion",
                     "ui_width",
+                    "ui_modal_width",
+                    "ui_nav_size",
+                    "ui_table_density",
                     "ui_background",
+                    "search_default_sort",
+                    "search_default_genres",
+                    "search_default_year_from",
+                    "search_default_year_to",
+                    "search_default_favorites_only",
+                    "search_default_downloaded_only",
                 }
             },
         )
@@ -2371,6 +3221,25 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         data = request.get_json(silent=True) or {}
         allowed = {"language", "provider", "enabled", "custom_path_id"}
         filtered = {k: v for k, v in data.items() if k in allowed}
+        options = _build_autosync_job_options(job)
+        valid_languages = set(options["languages"])
+        if options["allow_all_languages"]:
+            valid_languages.add("All Languages")
+
+        language = str(filtered.get("language", job.get("language") or "")).strip()
+        provider = str(filtered.get("provider", job.get("provider") or "")).strip()
+
+        if language not in valid_languages:
+            return jsonify({"error": "Selected language is not available for this series"}), 400
+
+        if language == "All Languages":
+            valid_providers = set(options["all_language_providers"])
+        else:
+            valid_providers = set(options["providers_by_language"].get(language, []))
+
+        if provider not in valid_providers:
+            return jsonify({"error": "Selected provider is not available for the chosen language"}), 400
+
         update_autosync_job(job_id, **filtered)
         _record_user_event(
             "autosync.updated",
@@ -2400,6 +3269,18 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         )
         _emit_ui_event("autosync", "dashboard", "nav", "settings")
         return jsonify({"ok": True})
+
+    @app.route("/api/autosync/<int:job_id>/options")
+    def api_autosync_options(job_id):
+        job = get_autosync_job(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        username, is_admin = _get_current_user_info()
+        if not is_admin and job.get("added_by") != username:
+            return jsonify({"error": "Not authorized to inspect this job"}), 403
+
+        options = _build_autosync_job_options(job)
+        return jsonify({"ok": True, **options})
 
     @app.route("/api/autosync/<int:job_id>/sync", methods=["POST"])
     def api_autosync_trigger(job_id):
@@ -2448,6 +3329,66 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             )
             _emit_ui_event("autosync")
         return jsonify({"ok": True, "started": started})
+
+    @app.route("/api/autosync/sync-selected", methods=["POST"])
+    def api_autosync_trigger_selected():
+        data = request.get_json(silent=True) or {}
+        raw_ids = data.get("ids") or []
+        if not isinstance(raw_ids, list):
+            return jsonify({"error": "ids must be a list"}), 400
+
+        selected_ids = []
+        seen = set()
+        for raw_id in raw_ids:
+            try:
+                job_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if job_id in seen:
+                continue
+            seen.add(job_id)
+            selected_ids.append(job_id)
+
+        if not selected_ids:
+            return jsonify({"error": "No sync jobs selected"}), 400
+
+        username, is_admin = _get_current_user_info()
+        started = 0
+        skipped = []
+
+        for job_id in selected_ids:
+            job = get_autosync_job(job_id)
+            if not job:
+                skipped.append({"id": job_id, "reason": "not_found"})
+                continue
+            if not is_admin and job.get("added_by") != username:
+                skipped.append({"id": job_id, "reason": "forbidden"})
+                continue
+            with _syncing_jobs_lock:
+                if job_id in _syncing_jobs:
+                    skipped.append({"id": job_id, "reason": "already_running"})
+                    continue
+            threading.Thread(
+                target=_run_autosync_for_job,
+                args=(job,),
+                daemon=True,
+            ).start()
+            started += 1
+
+        if started:
+            _record_user_event(
+                "autosync.triggered_selected",
+                subject_type="autosync",
+                subject="Sync Selected",
+                details={
+                    "started": started,
+                    "selected_ids": selected_ids,
+                    "skipped": skipped,
+                },
+            )
+            _emit_ui_event("autosync")
+
+        return jsonify({"ok": True, "started": started, "skipped": skipped})
 
     @app.route("/api/autosync/check", methods=["GET"])
     def api_autosync_check():
@@ -2674,6 +3615,11 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     def api_library():
         return jsonify(_get_cached_library_snapshot(include_meta=True))
 
+    @app.route("/api/library/compare")
+    def api_library_compare():
+        refresh = str(request.args.get("refresh", "0")).strip() == "1"
+        return jsonify(_get_cached_library_compare(refresh=refresh))
+
     @app.route("/api/library/delete", methods=["POST"])
     def api_library_delete():
         import shutil
@@ -2843,6 +3789,8 @@ def start_web_ui(
     app = create_app(
         auth_enabled=auth_enabled, sso_enabled=sso_enabled, force_sso=force_sso
     )
+    app.config["WEB_HOST"] = host
+    app.config["WEB_PORT"] = port
     display_host = "localhost" if host == "127.0.0.1" else host
     url = f"http://{display_host}:{port}"
     print(f"Starting AniWorld Web UI on {url}")

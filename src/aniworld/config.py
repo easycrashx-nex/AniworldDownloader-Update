@@ -1,5 +1,6 @@
 import os
 import re
+import tomllib
 from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -13,10 +14,22 @@ from .logger import get_logger
 
 VERSION = None
 
+
+def _read_source_version():
+    try:
+        pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        with pyproject_path.open("rb") as fh:
+            data = tomllib.load(fh)
+        return data.get("project", {}).get("version")
+    except Exception:
+        return None
+
 try:
     VERSION = version("aniworld")
 except PackageNotFoundError:
-    VERSION = None
+    VERSION = _read_source_version()
+else:
+    VERSION = _read_source_version() or VERSION
 
 
 def is_newest_version() -> bool:

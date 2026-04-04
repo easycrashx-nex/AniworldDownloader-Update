@@ -2,6 +2,10 @@ let libraryAllLocations = [];
 let libraryLocations = [];
 var libraryLangSep = false;
 let libraryRequest = null;
+let libraryCompareRequest = null;
+let libraryCompareLoaded = false;
+let libraryCompareMap = new Map();
+let libraryCompareSummary = null;
 
 const librarySearchInput = document.getElementById("librarySearchInput");
 const libraryLocationFilter = document.getElementById("libraryLocationFilter");
@@ -9,6 +13,8 @@ const libraryLanguageFilter = document.getElementById("libraryLanguageFilter");
 const librarySortFilter = document.getElementById("librarySortFilter");
 const libraryIssueFilter = document.getElementById("libraryIssueFilter");
 const librarySummary = document.getElementById("librarySummary");
+const libraryCompareStatus = document.getElementById("libraryCompareStatus");
+const libraryCompareBtn = document.getElementById("libraryCompareBtn");
 
 function getExpandedState() {
   var state = { locations: {}, langFolders: {}, titles: {}, seasons: {} };
@@ -139,6 +145,7 @@ async function loadLibrary() {
       libraryLangSep = !!data.lang_sep;
       populateLibraryFilters();
       applyLibraryFilters();
+      loadLibraryCompare();
     } catch (e) {
       renderLibrarySummary([]);
       list.innerHTML = '<div class="library-empty">Failed to load library</div>';
@@ -202,6 +209,8 @@ function buildTitleInsights(title) {
   var missingCount = 0;
   var duplicateCount = 0;
   var seasonCount = 0;
+  var sourceMissingCount = 0;
+  var compare = title.compare || null;
 
   Object.keys(title.seasons || {}).forEach(function (seasonKey) {
     seasonCount += 1;
@@ -234,22 +243,37 @@ function buildTitleInsights(title) {
     }
   });
 
+  if (compare && compare.available) {
+    sourceMissingCount = Number(compare.missing_count || 0);
+  }
+
   return {
     missingCount: missingCount,
     duplicateCount: duplicateCount,
+    sourceMissingCount: sourceMissingCount,
     seasonCount: seasonCount,
     issueLevel:
-      duplicateCount > 0 ? "duplicates" : missingCount > 0 ? "missing" : "healthy",
+      duplicateCount > 0
+        ? "duplicates"
+        : missingCount > 0 || sourceMissingCount > 0
+          ? "missing"
+          : "healthy",
   };
 }
 
 function matchesIssueFilter(title, issueValue) {
   if (!issueValue) return true;
   var insights = title.insights || buildTitleInsights(title);
-  if (issueValue === "missing") return insights.missingCount > 0;
+  if (issueValue === "missing") {
+    return insights.missingCount > 0 || insights.sourceMissingCount > 0;
+  }
   if (issueValue === "duplicates") return insights.duplicateCount > 0;
   if (issueValue === "healthy") {
-    return insights.missingCount === 0 && insights.duplicateCount === 0;
+    return (
+      insights.missingCount === 0 &&
+      insights.sourceMissingCount === 0 &&
+      insights.duplicateCount === 0
+    );
   }
   return true;
 }
@@ -277,6 +301,8 @@ function renderLibrarySummary(locations) {
   var totalSize = 0;
   var missingTitles = 0;
   var duplicateTitles = 0;
+  var sourceMissingTitles = 0;
+  var sourceMissingEpisodes = 0;
 
   locations.forEach(function (loc) {
     var titleGroups;
@@ -294,7 +320,13 @@ function renderLibrarySummary(locations) {
       episodeCount += Number(title.total_episodes || 0);
       totalSize += Number(title.total_size || 0);
       var insights = title.insights || buildTitleInsights(title);
-      if (insights.missingCount > 0) missingTitles += 1;
+      if (insights.missingCount > 0 || insights.sourceMissingCount > 0) {
+        missingTitles += 1;
+      }
+      if (insights.sourceMissingCount > 0) {
+        sourceMissingTitles += 1;
+        sourceMissingEpisodes += insights.sourceMissingCount;
+      }
       if (insights.duplicateCount > 0) duplicateTitles += 1;
     });
   });
@@ -317,6 +349,86 @@ function renderLibrarySummary(locations) {
       <strong>${missingTitles + duplicateTitles}</strong>
       <span class="library-summary-note">${missingTitles} gaps · ${duplicateTitles} duplicates</span>
     </div>`;
+  librarySummary.innerHTML = `
+    <div class="library-summary-card">
+      <span class="library-summary-label">Titles</span>
+      <strong>${titleCount}</strong>
+    </div>
+    <div class="library-summary-card">
+      <span class="library-summary-label">Episodes</span>
+      <strong>${episodeCount}</strong>
+    </div>
+    <div class="library-summary-card">
+      <span class="library-summary-label">Storage</span>
+      <strong>${formatSize(totalSize)}</strong>
+    </div>
+    <div class="library-summary-card">
+      <span class="library-summary-label">Need Attention</span>
+      <strong>${missingTitles + duplicateTitles}</strong>
+      <span class="library-summary-note">${missingTitles} gaps · ${duplicateTitles} duplicates</span>
+    </div>
+    <div class="library-summary-card">
+      <span class="library-summary-label">Source Compare</span>
+      <strong>${sourceMissingTitles}</strong>
+      <span class="library-summary-note">${
+        libraryCompareLoaded
+          ? sourceMissingEpisodes
+            ? sourceMissingEpisodes + " source episodes missing locally"
+            : "No missing episodes found against linked sources"
+          : "Checking linked titles in the background"
+      }</span>
+    </div>`;
+}
+
+function setLibraryCompareStatus(message, loading) {
+  if (libraryCompareStatus) {
+    libraryCompareStatus.textContent = message;
+  }
+  if (libraryCompareBtn) {
+    libraryCompareBtn.disabled = !!loading;
+    libraryCompareBtn.textContent = loading ? "Comparing..." : "Refresh Compare";
+  }
+}
+
+async function loadLibraryCompare(forceRefresh) {
+  if (libraryCompareRequest) return libraryCompareRequest;
+  setLibraryCompareStatus("Checking linked titles against the source...", true);
+  libraryCompareRequest = (async function () {
+    try {
+      var resp = await fetch("/api/library/compare" + (forceRefresh ? "?refresh=1" : ""));
+      var data = await resp.json();
+      libraryCompareSummary = data.summary || null;
+      libraryCompareMap = new Map(Object.entries(data.items || {}));
+      libraryCompareLoaded = true;
+      if (libraryCompareSummary) {
+        if (libraryCompareSummary.out_of_sync > 0) {
+          setLibraryCompareStatus(
+            libraryCompareSummary.out_of_sync +
+              " linked title(s) are behind the source right now.",
+            false,
+          );
+        } else if (libraryCompareSummary.compared > 0) {
+          setLibraryCompareStatus(
+            "Linked library titles are in sync with their source pages.",
+            false,
+          );
+        } else {
+          setLibraryCompareStatus(
+            "No linked source titles were available for comparison.",
+            false,
+          );
+        }
+      } else {
+        setLibraryCompareStatus("Source compare finished.", false);
+      }
+      applyLibraryFilters();
+    } catch (e) {
+      setLibraryCompareStatus("Source compare could not be loaded.", false);
+    } finally {
+      libraryCompareRequest = null;
+    }
+  })();
+  return libraryCompareRequest;
 }
 
 function applyLibraryFilters() {
@@ -341,6 +453,9 @@ function applyLibraryFilters() {
             var filteredTitles = (lf.titles || [])
               .map(function (title) {
                 var nextTitle = Object.assign({}, title);
+                nextTitle.compare = nextTitle.series_url
+                  ? libraryCompareMap.get(nextTitle.series_url) || null
+                  : null;
                 nextTitle.insights = buildTitleInsights(nextTitle);
                 return nextTitle;
               })
@@ -373,6 +488,9 @@ function applyLibraryFilters() {
           (loc.titles || [])
             .map(function (title) {
               var nextTitle = Object.assign({}, title);
+              nextTitle.compare = nextTitle.series_url
+                ? libraryCompareMap.get(nextTitle.series_url) || null
+                : null;
               nextTitle.insights = buildTitleInsights(nextTitle);
               return nextTitle;
             })
@@ -447,6 +565,13 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
             " missing</span>",
         );
       }
+      if (title.insights.sourceMissingCount > 0) {
+        html.push(
+          '<span class="library-issue-chip library-issue-source-missing">' +
+            title.insights.sourceMissingCount +
+            " source missing</span>",
+        );
+      }
       if (title.insights.duplicateCount > 0) {
         html.push(
           '<span class="library-issue-chip library-issue-duplicate">' +
@@ -456,6 +581,7 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
       }
       if (
         title.insights.missingCount === 0 &&
+        title.insights.sourceMissingCount === 0 &&
         title.insights.duplicateCount === 0
       ) {
         html.push(
@@ -511,11 +637,25 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
           title.total_episodes +
           " episodes</span>",
       );
+      var comparePreview =
+        title.compare &&
+        Array.isArray(title.compare.missing_sample) &&
+        title.compare.missing_sample.length
+          ? " Missing: " + title.compare.missing_sample.slice(0, 3).join(", ")
+          : "";
       if (title.insights.missingCount > 0) {
         html.push(
           '<span class="library-title-insight-warning">' +
             title.insights.missingCount +
             " episode gaps detected</span>",
+        );
+      } else if (title.insights.sourceMissingCount > 0) {
+        html.push(
+          '<span class="library-title-insight-warning">' +
+            title.insights.sourceMissingCount +
+            " episodes missing against source." +
+            escLib(comparePreview) +
+            "</span>",
         );
       } else if (title.insights.duplicateCount > 0) {
         html.push(
@@ -524,7 +664,11 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
             " duplicates detected</span>",
         );
       } else {
-        html.push("<span>Folder looks clean</span>");
+        html.push(
+          title.compare && title.compare.available
+            ? "<span>Source compare is clean</span>"
+            : "<span>Folder looks clean</span>",
+        );
       }
       html.push("</div>");
     }
@@ -871,11 +1015,17 @@ if (librarySortFilter) {
 if (libraryIssueFilter) {
   libraryIssueFilter.addEventListener("change", applyLibraryFilters);
 }
+if (libraryCompareBtn) {
+  libraryCompareBtn.addEventListener("click", function () {
+    loadLibraryCompare(true);
+  });
+}
 
 loadLibrary();
 
 if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
   window.LiveUpdates.subscribe(["library", "settings"], function () {
     loadLibrary();
+    loadLibraryCompare();
   });
 }

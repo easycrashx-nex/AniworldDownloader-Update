@@ -73,18 +73,54 @@
   </div>
 
   <div class="settings-section">
-    <h2>Entwicklungsumgebung</h2>
+    <h2>Server Info</h2>
+    <div class="settings-info-grid">
+      <div class="settings-info-card">
+        <span class="field-label">Bind Host</span>
+        <strong id="serverBindHost" class="settings-static-value">-</strong>
+      </div>
+      <div class="settings-info-card">
+        <span class="field-label">Port</span>
+        <strong id="serverPort" class="settings-static-value">-</strong>
+      </div>
+      <div class="settings-info-card">
+        <span class="field-label">Scope</span>
+        <strong id="serverScope" class="settings-static-value">-</strong>
+      </div>
+    </div>
+    <div class="settings-stack">
+      <div class="settings-info-card">
+        <span class="field-label">Current IPs</span>
+        <div id="serverIps" class="settings-chip-list">
+          <span class="settings-chip">-</span>
+        </div>
+      </div>
+      <div class="settings-info-card">
+        <span class="field-label">Open URLs</span>
+        <div id="serverAccessUrls" class="settings-chip-list">
+          <span class="settings-chip">-</span>
+        </div>
+      </div>
+    </div>
+    <div class="settings-hint">
+      Shows the current address of the running web server. If you start with
+      <code>--web-expose</code>, your local network IPs will also appear here.
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h2>Development</h2>
     <label class="settings-checkbox">
       <input
         type="checkbox"
         id="experimentalFilmpalast"
         onchange="saveExperimentalFilmpalast()"
       />
-      FilmPalast im Downloader einblenden
+      Show FilmPalast in the downloader
     </label>
     <div class="settings-hint">
-      Blendet FilmPalast im Home-Bereich wieder ein, solange die Quelle noch in
-      Entwicklung ist.
+      Re-enables FilmPalast in the home area while the source is still in
+      development.
     </div>
   </div>
 
@@ -94,8 +130,10 @@
       <div class="settings-field">
         <label class="field-label">Density</label>
         <select id="uiMode" onchange="saveUiMode()" class="sync-select">
+          <option value="airy">Airy</option>
           <option value="cozy">Cozy</option>
           <option value="compact">Compact</option>
+          <option value="tight">Tight</option>
         </select>
       </div>
       <div class="settings-field">
@@ -109,10 +147,107 @@
         </select>
       </div>
       <div class="settings-field">
+        <label class="field-label">Theme Color</label>
+        <select id="uiTheme" onchange="saveUiTheme()" class="sync-select">
+          <option value="ocean">Ocean</option>
+          <option value="mint">Mint</option>
+          <option value="sunset">Sunset</option>
+          <option value="rose">Rose</option>
+          <option value="arctic">Arctic</option>
+          <option value="forest">Forest</option>
+          <option value="ember">Ember</option>
+          <option value="amber">Amber</option>
+          <option value="lavender">Lavender</option>
+          <option value="cobalt">Cobalt</option>
+          <option value="coral">Coral</option>
+          <option value="mono">Mono</option>
+          <option value="electric">Electric</option>
+          <option value="berry">Berry</option>
+          <option value="midnight">Midnight</option>
+          <option value="jade">Jade</option>
+          <option value="crimson">Crimson</option>
+          <option value="orchid">Orchid</option>
+          <option value="citrus">Citrus</option>
+          <option value="steel">Steel</option>
+          <option value="sapphire">Sapphire</option>
+          <option value="ruby">Ruby</option>
+          <option value="plum">Plum</option>
+          <option value="sand">Sand</option>
+          <option value="glacier">Glacier</option>
+          <option value="emerald">Emerald</option>
+          <option value="neon">Neon</option>
+          <option value="peach">Peach</option>
+          <option value="sky">Sky</option>
+          <option value="bronze">Bronze</option>
+          <option value="pearl">Pearl</option>
+          <option value="slate">Slate</option>
+          <option value="lemon">Lemon</option>
+          <option value="aqua">Aqua</option>
+          <option value="indigo">Indigo</option>
+          <option value="cherry">Cherry</option>
+          <option value="lilac">Lilac</option>
+          <option value="copper">Copper</option>
+          <option value="lime">Lime</option>
+          <option value="azure">Azure</option>
+          <option value="magma">Magma</option>
+          <option value="blush">Blush</option>
+          <option value="pine">Pine</option>
+          <option value="violet">Violet</option>
+        </select>
+      </div>
+      <div class="settings-field">
+        <label class="field-label">Card Radius</label>
+        <select id="uiRadius" onchange="saveUiRadius()" class="sync-select">
+          <option value="structured">Structured</option>
+          <option value="soft">Soft</option>
+          <option value="round">Round</option>
+        </select>
+      </div>
+      <div class="settings-field">
+        <label class="field-label">Animation Speed</label>
+        <select id="uiMotion" onchange="saveUiMotion()" class="sync-select">
+          <option value="slow">Slow</option>
+          <option value="normal">Normal</option>
+          <option value="fast">Fast</option>
+        </select>
+      </div>
+      <div class="settings-field">
         <label class="field-label">Content Width</label>
         <select id="uiWidth" onchange="saveUiWidth()" class="sync-select">
           <option value="standard">Standard</option>
           <option value="wide">Wide</option>
+        </select>
+      </div>
+      <div class="settings-field">
+        <label class="field-label">Modal Width</label>
+        <select
+          id="uiModalWidth"
+          onchange="saveUiModalWidth()"
+          class="sync-select"
+        >
+          <option value="compact">Compact</option>
+          <option value="standard">Standard</option>
+          <option value="wide">Wide</option>
+        </select>
+      </div>
+      <div class="settings-field">
+        <label class="field-label">Nav Size</label>
+        <select id="uiNavSize" onchange="saveUiNavSize()" class="sync-select">
+          <option value="compact">Compact</option>
+          <option value="standard">Standard</option>
+          <option value="large">Large</option>
+        </select>
+      </div>
+      <div class="settings-field">
+        <label class="field-label">Table Density</label>
+        <select
+          id="uiTableDensity"
+          onchange="saveUiTableDensity()"
+          class="sync-select"
+        >
+          <option value="compact">Compact</option>
+          <option value="standard">Standard</option>
+          <option value="relaxed">Relaxed</option>
         </select>
       </div>
       <div class="settings-field">
@@ -123,16 +258,98 @@
           class="sync-select"
         >
           <option value="dynamic">Dynamic</option>
+          <option value="cinematic">Cinematic</option>
           <option value="subtle">Subtle</option>
+          <option value="minimal">Minimal</option>
+          <option value="aurora">Aurora</option>
+          <option value="nebula">Nebula</option>
+          <option value="frost">Frost</option>
+          <option value="ember">Ember Glow</option>
+          <option value="grid">Grid</option>
+          <option value="pulse">Pulse</option>
+          <option value="drift">Drift</option>
+          <option value="storm">Storm</option>
+          <option value="dusk">Dusk</option>
+          <option value="bloom">Bloom</option>
           <option value="off">Off</option>
         </select>
       </div>
     </div>
     <div class="settings-hint">
-      Tune density and scale for your own account. Cozy gives the UI more
-      breathing room, Compact tightens it up, UI Scale adjusts the overall size
-      more gently, Content Width controls how broad the layout feels, and
-      Background Effects let you calm down or disable the animated backdrop.
+      Tune density and scale for your own account. Airy opens up spacing,
+      Cozy stays balanced, Compact trims space down, Tight packs the UI
+      hardest, Theme Color shifts the accent palette across a much larger set
+      of palettes, Card Radius changes the panel softness, Animation Speed
+      controls motion, Modal Width affects overlays, Nav Size changes the top
+      bar scale, Table Density adjusts the settings tables, Content Width
+      controls how broad the layout feels, and Background Effects now range
+      from calm minimal scenes to more atmospheric or energetic looks.
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h2>Default Search Filters</h2>
+    <div class="settings-row" style="gap: 10px; flex-wrap: wrap">
+      <div class="settings-field">
+        <label class="field-label">Default Sort</label>
+        <select
+          id="searchDefaultSort"
+          onchange="saveSearchDefaults()"
+          class="sync-select"
+        >
+          <option value="source">Best Match</option>
+          <option value="year-desc">Newest Year</option>
+          <option value="year-asc">Oldest Year</option>
+          <option value="title-asc">Title A-Z</option>
+          <option value="title-desc">Title Z-A</option>
+        </select>
+      </div>
+      <div class="settings-field">
+        <label class="field-label">Default Genres</label>
+        <input
+          type="text"
+          id="searchDefaultGenres"
+          placeholder="Action, Fantasy"
+        />
+      </div>
+      <div class="settings-field">
+        <label class="field-label">Year From</label>
+        <input
+          type="number"
+          id="searchDefaultYearFrom"
+          min="1950"
+          max="2099"
+          placeholder="Optional"
+        />
+      </div>
+      <div class="settings-field">
+        <label class="field-label">Year To</label>
+        <input
+          type="number"
+          id="searchDefaultYearTo"
+          min="1950"
+          max="2099"
+          placeholder="Optional"
+        />
+      </div>
+    </div>
+    <div class="settings-row" style="gap: 18px; flex-wrap: wrap">
+      <label class="settings-checkbox">
+        <input type="checkbox" id="searchDefaultFavoritesOnly" />
+        Favorites Only by default
+      </label>
+      <label class="settings-checkbox">
+        <input type="checkbox" id="searchDefaultDownloadedOnly" />
+        Downloaded Only by default
+      </label>
+      <button onclick="saveSearchDefaults()">Save Search Defaults</button>
+      <button class="btn-secondary" onclick="resetSearchDefaultsConfig()">
+        Reset Search Defaults
+      </button>
+    </div>
+    <div class="settings-hint">
+      These values are applied automatically on the Home search screen and are
+      also used when you hit Reset Filters.
     </div>
   </div>
 

@@ -176,6 +176,7 @@ const SEARCH_GENRE_PRESETS = {
 // Custom paths select
 const customPathSelect = document.getElementById("customPathSelect");
 const experimentalConfig = window.ANIWORLD_EXPERIMENTAL || {};
+const bootSettings = window.ANIWORLD_BOOT_SETTINGS || {};
 const SITE_CONFIG = {
   aniworld: {
     label: "AniWorld",
@@ -230,6 +231,15 @@ const SITE_CONFIG = {
 };
 const DIRECT_URL_PATTERN = /^https?:\/\/(?:www\.)?(?:aniworld\.to\/anime\/stream\/|s\.to\/(?:serie\/)?(?:stream\/)?|serienstream\.to\/(?:serie\/)?(?:stream\/)?|filmpalast\.to\/stream\/)/i;
 const DIRECT_URL_PATTERN_NO_FILMPALAST = /^https?:\/\/(?:www\.)?(?:aniworld\.to\/anime\/stream\/|s\.to\/(?:serie\/)?(?:stream\/)?|serienstream\.to\/(?:serie\/)?(?:stream\/)?)/i;
+const SEARCH_DEFAULT_STATE = {
+  genreInput: "",
+  yearFrom: "",
+  yearTo: "",
+  sortBy: "source",
+  favoritesOnly: false,
+  downloadedOnly: false,
+};
+let configuredSearchDefaults = { ...SEARCH_DEFAULT_STATE };
 
 function isFilmPalastEnabled() {
   return experimentalConfig.filmpalast === true;
@@ -363,6 +373,46 @@ function normalizeSearchFilterValue(value) {
   return String(value || "")
     .trim()
     .toLowerCase();
+}
+
+function normalizeSearchDefaultSortValue(value) {
+  return ["source", "year-desc", "year-asc", "title-asc", "title-desc"].includes(
+    value,
+  )
+    ? value
+    : "source";
+}
+
+function readConfiguredSearchDefaults() {
+  const defaults = bootSettings.searchDefaults || {};
+  configuredSearchDefaults = {
+    genreInput: String(defaults.genres || ""),
+    yearFrom: String(defaults.yearFrom || ""),
+    yearTo: String(defaults.yearTo || ""),
+    sortBy: normalizeSearchDefaultSortValue(defaults.sort || "source"),
+    favoritesOnly:
+      defaults.favoritesOnly === true || defaults.favoritesOnly === "1",
+    downloadedOnly:
+      defaults.downloadedOnly === true || defaults.downloadedOnly === "1",
+  };
+}
+
+function applyConfiguredSearchDefaults(updateResults = true) {
+  if (searchGenreInput) searchGenreInput.value = configuredSearchDefaults.genreInput;
+  if (searchYearFrom) searchYearFrom.value = configuredSearchDefaults.yearFrom;
+  if (searchYearTo) searchYearTo.value = configuredSearchDefaults.yearTo;
+  if (searchSortBy) {
+    searchSortBy.value = configuredSearchDefaults.sortBy;
+    if (window.refreshCustomSelect) window.refreshCustomSelect(searchSortBy);
+  }
+  if (searchFavoritesOnly) {
+    searchFavoritesOnly.checked = configuredSearchDefaults.favoritesOnly;
+  }
+  if (searchDownloadedOnly) {
+    searchDownloadedOnly.checked = configuredSearchDefaults.downloadedOnly;
+  }
+  renderPresetGenreChips();
+  if (updateResults) applySearchFilters();
 }
 
 function parseGenreFilterTerms(value) {
@@ -620,16 +670,7 @@ function applySearchFilters() {
 }
 
 function resetSearchFilters() {
-  if (searchGenreInput) searchGenreInput.value = "";
-  if (searchYearFrom) searchYearFrom.value = "";
-  if (searchYearTo) searchYearTo.value = "";
-  if (searchSortBy) searchSortBy.value = "source";
-  if (searchFavoritesOnly) searchFavoritesOnly.checked = false;
-  if (searchDownloadedOnly) searchDownloadedOnly.checked = false;
-  if (window.refreshCustomSelect && searchSortBy) {
-    window.refreshCustomSelect(searchSortBy);
-  }
-  applySearchFilters();
+  applyConfiguredSearchDefaults();
 }
 
 function getSiteKeyFromUrl(url) {
@@ -1793,8 +1834,10 @@ function rebuildLanguageSelect() {
 // Restore site toggle state from localStorage
 (function syncSiteToggle() {
   if (!isHomePage) return;
+  readConfiguredSearchDefaults();
   const saved = localStorage.getItem("selectedSite");
   setSite(normalizeSite(saved || "aniworld"), false);
+  applyConfiguredSearchDefaults(false);
 })();
 
 if (searchInput) {
@@ -2567,7 +2610,15 @@ async function startDownload(all) {
       return;
     }
 
-    showToast("Added to download queue");
+    if (data.skipped_conflicts > 0) {
+      showToast(
+        "Added to queue, skipped " +
+          data.skipped_conflicts +
+          " episode(s) that were already queued or running.",
+      );
+    } else {
+      showToast("Added to download queue");
+    }
     if (typeof loadQueue === "function") loadQueue();
     loadDashboardStats();
   } catch (e) {
@@ -2693,6 +2744,12 @@ async function toggleAutoSync() {
 }
 
 function showToast(msg) {
+  if (
+    window.AniworldNotifications &&
+    typeof window.AniworldNotifications.add === "function"
+  ) {
+    window.AniworldNotifications.add(msg, { source: "Browse" });
+  }
   const t = document.getElementById("toast");
   t.textContent = msg;
   t.style.display = "block";

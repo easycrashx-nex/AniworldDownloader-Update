@@ -3,13 +3,182 @@
   const statsBadge = document.getElementById("statsBadge");
   const settingsBadge = document.getElementById("settingsBadge");
   const queueBadge = document.getElementById("queueBadge");
+  const notificationMenu = document.getElementById("notificationMenu");
+  const notificationBadge = document.getElementById("notificationBadge");
+  const notificationList = document.getElementById("notificationCenterList");
+  const notificationEmpty = document.getElementById("notificationCenterEmpty");
+  const notificationClearBtn = document.getElementById("notificationClearBtn");
+  const toast = document.getElementById("toast");
   const navMenus = Array.from(document.querySelectorAll(".nav-menu"));
   let navFallbackTimer = null;
   let navRequest = null;
   let shellSettingsRequest = null;
+  let toastTimer = null;
+  let notifications = [];
+  const notificationScope = document.body.dataset.currentUser || "__anon__";
+
+  function notificationStorageKey() {
+    return "aniworld:notifications:" + notificationScope;
+  }
+
+  function escText(value) {
+    const div = document.createElement("div");
+    div.textContent = String(value || "");
+    return div.innerHTML;
+  }
+
+  function formatNotificationTime(isoValue) {
+    if (!isoValue) return "";
+    const date = new Date(isoValue);
+    if (Number.isNaN(date.getTime())) return "";
+    const now = Date.now();
+    const diffMs = Math.max(0, now - date.getTime());
+    const diffMinutes = Math.round(diffMs / 60000);
+    if (diffMinutes < 1) return "Just now";
+    if (diffMinutes < 60) return diffMinutes + "m ago";
+    const diffHours = Math.round(diffMinutes / 60);
+    if (diffHours < 24) return diffHours + "h ago";
+    return date.toLocaleDateString();
+  }
+
+  function saveNotifications() {
+    try {
+      localStorage.setItem(notificationStorageKey(), JSON.stringify(notifications));
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function renderNotifications() {
+    if (!notificationList || !notificationEmpty) return;
+
+    if (!notifications.length) {
+      notificationList.innerHTML = "";
+      notificationEmpty.style.display = "block";
+    } else {
+      notificationEmpty.style.display = "none";
+      notificationList.innerHTML = notifications
+        .map((entry) => {
+          const level = String(entry.level || "info");
+          const levelClass =
+            level === "error"
+              ? "notification-item-error"
+              : level === "success"
+                ? "notification-item-success"
+                : level === "warning"
+                  ? "notification-item-warning"
+                  : "notification-item-info";
+          const source = String(entry.source || "App");
+          return (
+            '<div class="notification-item ' +
+            levelClass +
+            (entry.read ? "" : " is-unread") +
+            '">' +
+            '<div class="notification-item-top">' +
+            '<span class="notification-item-source">' +
+            escText(source) +
+            "</span>" +
+            '<span class="notification-item-time">' +
+            escText(formatNotificationTime(entry.createdAt)) +
+            "</span>" +
+            "</div>" +
+            '<div class="notification-item-message">' +
+            escText(entry.message) +
+            "</div>" +
+            "</div>"
+          );
+        })
+        .join("");
+    }
+
+    setBadge(
+      notificationBadge,
+      notifications.filter((entry) => !entry.read).length,
+    );
+  }
+
+  function loadNotifications() {
+    try {
+      const raw = localStorage.getItem(notificationStorageKey());
+      notifications = raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      notifications = [];
+    }
+    notifications = Array.isArray(notifications) ? notifications.slice(0, 30) : [];
+    renderNotifications();
+  }
+
+  function markNotificationsRead() {
+    let changed = false;
+    notifications = notifications.map((entry) => {
+      if (entry.read) return entry;
+      changed = true;
+      return Object.assign({}, entry, { read: true });
+    });
+    if (changed) {
+      saveNotifications();
+      renderNotifications();
+    }
+  }
+
+  function clearNotifications() {
+    notifications = [];
+    saveNotifications();
+    renderNotifications();
+  }
+
+  function addNotification(message, options = {}) {
+    const cleanMessage = String(message || "").trim();
+    if (!cleanMessage) return;
+
+    const previous = notifications[0];
+    const now = Date.now();
+    const isDuplicate =
+      previous &&
+      previous.message === cleanMessage &&
+      previous.source === (options.source || "App") &&
+      now - new Date(previous.createdAt).getTime() < 4000;
+
+    if (isDuplicate) {
+      notifications[0] = Object.assign({}, previous, {
+        createdAt: new Date(now).toISOString(),
+        read: false,
+      });
+    } else {
+      notifications.unshift({
+        id: String(now) + "-" + Math.random().toString(16).slice(2, 8),
+        message: cleanMessage,
+        level: options.level || "info",
+        source: options.source || "App",
+        createdAt: new Date(now).toISOString(),
+        read: false,
+      });
+      notifications = notifications.slice(0, 30);
+    }
+
+    saveNotifications();
+    renderNotifications();
+  }
+
+  function showGlobalToast(message, options = {}) {
+    addNotification(message, options);
+    if (!toast) return;
+    toast.textContent = message;
+    toast.style.display = "block";
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.style.display = "none";
+    }, 4000);
+  }
 
   function applyUiDensity(mode) {
-    const nextMode = mode === "compact" ? "compact" : "cozy";
+    const nextMode =
+      mode === "airy" ||
+      mode === "compact" ||
+      mode === "tight" ||
+      mode === "cozy"
+        ? mode
+        : "cozy";
     document.body.setAttribute("data-ui-density", nextMode);
   }
 
@@ -25,14 +194,118 @@
     document.body.setAttribute("data-ui-scale", nextScale);
   }
 
+  function applyUiTheme(theme) {
+    const nextTheme = [
+      "ocean",
+      "mint",
+      "sunset",
+      "rose",
+      "arctic",
+      "forest",
+      "ember",
+      "amber",
+      "lavender",
+      "cobalt",
+      "coral",
+      "mono",
+      "electric",
+      "berry",
+      "midnight",
+      "jade",
+      "crimson",
+      "orchid",
+      "citrus",
+      "steel",
+      "sapphire",
+      "ruby",
+      "plum",
+      "sand",
+      "glacier",
+      "emerald",
+      "neon",
+      "peach",
+      "sky",
+      "bronze",
+      "pearl",
+      "slate",
+      "lemon",
+      "aqua",
+      "indigo",
+      "cherry",
+      "lilac",
+      "copper",
+      "lime",
+      "azure",
+      "magma",
+      "blush",
+      "pine",
+      "violet",
+    ].includes(theme)
+      ? theme
+      : "ocean";
+    document.body.setAttribute("data-ui-theme", nextTheme);
+  }
+
+  function applyUiRadius(radius) {
+    const nextRadius =
+      radius === "structured" || radius === "round" ? radius : "soft";
+    document.body.setAttribute("data-ui-radius", nextRadius);
+  }
+
+  function applyUiMotion(mode) {
+    const nextMode =
+      mode === "slow" || mode === "fast" ? mode : "normal";
+    document.body.setAttribute("data-ui-motion", nextMode);
+    document.dispatchEvent(
+      new CustomEvent("aniworld:ui-motion", {
+        detail: { mode: nextMode },
+      }),
+    );
+  }
+
   function applyUiWidth(width) {
     const nextWidth = width === "wide" ? "wide" : "standard";
     document.body.setAttribute("data-ui-width", nextWidth);
   }
 
+  function applyUiModalWidth(width) {
+    const nextWidth =
+      width === "compact" || width === "wide" ? width : "standard";
+    document.body.setAttribute("data-ui-modal-width", nextWidth);
+  }
+
+  function applyUiNavSize(size) {
+    const nextSize =
+      size === "compact" || size === "large" ? size : "standard";
+    document.body.setAttribute("data-ui-nav-size", nextSize);
+  }
+
+  function applyUiTableDensity(density) {
+    const nextDensity =
+      density === "compact" || density === "relaxed" ? density : "standard";
+    document.body.setAttribute("data-ui-table-density", nextDensity);
+  }
+
   function applyUiBackground(mode) {
-    const nextMode =
-      mode === "subtle" || mode === "off" ? mode : "dynamic";
+    const nextMode = [
+      "dynamic",
+      "cinematic",
+      "subtle",
+      "minimal",
+      "aurora",
+      "nebula",
+      "frost",
+      "ember",
+      "grid",
+      "pulse",
+      "drift",
+      "storm",
+      "dusk",
+      "bloom",
+      "off",
+    ].includes(mode)
+      ? mode
+      : "dynamic";
     document.body.setAttribute("data-ui-background", nextMode);
     document.dispatchEvent(
       new CustomEvent("aniworld:ui-background", {
@@ -49,7 +322,17 @@
         const data = await resp.json();
         applyUiDensity(data.ui_mode || document.body.dataset.uiDensity);
         applyUiScale(data.ui_scale || document.body.dataset.uiScale);
+        applyUiTheme(data.ui_theme || document.body.dataset.uiTheme);
+        applyUiRadius(data.ui_radius || document.body.dataset.uiRadius);
+        applyUiMotion(data.ui_motion || document.body.dataset.uiMotion);
         applyUiWidth(data.ui_width || document.body.dataset.uiWidth);
+        applyUiModalWidth(
+          data.ui_modal_width || document.body.dataset.uiModalWidth,
+        );
+        applyUiNavSize(data.ui_nav_size || document.body.dataset.uiNavSize);
+        applyUiTableDensity(
+          data.ui_table_density || document.body.dataset.uiTableDensity,
+        );
         applyUiBackground(
           data.ui_background || document.body.dataset.uiBackground,
         );
@@ -124,11 +407,39 @@
     if (event.key === "Escape") closeNavMenus();
   });
 
+  if (notificationMenu) {
+    notificationMenu.addEventListener("mouseenter", markNotificationsRead);
+    notificationMenu.addEventListener("focusin", markNotificationsRead);
+  }
+
+  if (notificationClearBtn) {
+    notificationClearBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      clearNotifications();
+    });
+  }
+
   window.loadNavState = loadNavState;
   window.applyUiDensity = applyUiDensity;
   window.applyUiScale = applyUiScale;
+  window.applyUiTheme = applyUiTheme;
+  window.applyUiRadius = applyUiRadius;
+  window.applyUiMotion = applyUiMotion;
   window.applyUiWidth = applyUiWidth;
+  window.applyUiModalWidth = applyUiModalWidth;
+  window.applyUiNavSize = applyUiNavSize;
+  window.applyUiTableDensity = applyUiTableDensity;
   window.applyUiBackground = applyUiBackground;
+  window.AniworldNotifications = {
+    add: addNotification,
+    clear: clearNotifications,
+    showToast: showGlobalToast,
+  };
+  if (typeof window.showToast !== "function") {
+    window.showToast = showGlobalToast;
+  }
+  loadNotifications();
   loadNavState();
   loadShellSettings();
 

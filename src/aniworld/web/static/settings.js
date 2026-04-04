@@ -7,8 +7,33 @@ const experimentalFilmpalastCb = document.getElementById(
 );
 const uiModeSelect = document.getElementById("uiMode");
 const uiScaleSelect = document.getElementById("uiScale");
+const uiThemeSelect = document.getElementById("uiTheme");
+const uiRadiusSelect = document.getElementById("uiRadius");
+const uiMotionSelect = document.getElementById("uiMotion");
 const uiWidthSelect = document.getElementById("uiWidth");
+const uiModalWidthSelect = document.getElementById("uiModalWidth");
+const uiNavSizeSelect = document.getElementById("uiNavSize");
+const uiTableDensitySelect = document.getElementById("uiTableDensity");
 const uiBackgroundSelect = document.getElementById("uiBackground");
+const serverBindHostValue = document.getElementById("serverBindHost");
+const serverPortValue = document.getElementById("serverPort");
+const serverScopeValue = document.getElementById("serverScope");
+const serverIpsWrap = document.getElementById("serverIps");
+const serverAccessUrlsWrap = document.getElementById("serverAccessUrls");
+const searchDefaultSortSelect = document.getElementById("searchDefaultSort");
+const searchDefaultGenresInput = document.getElementById(
+  "searchDefaultGenres",
+);
+const searchDefaultYearFromInput = document.getElementById(
+  "searchDefaultYearFrom",
+);
+const searchDefaultYearToInput = document.getElementById("searchDefaultYearTo");
+const searchDefaultFavoritesOnlyCb = document.getElementById(
+  "searchDefaultFavoritesOnly",
+);
+const searchDefaultDownloadedOnlyCb = document.getElementById(
+  "searchDefaultDownloadedOnly",
+);
 const syncScheduleSelect = document.getElementById("syncSchedule");
 const syncLanguageSelect = document.getElementById("syncLanguage");
 const syncProviderSelect = document.getElementById("syncProvider");
@@ -36,8 +61,35 @@ function refreshSettingsSelects() {
   if (syncProviderSelect) window.refreshCustomSelect(syncProviderSelect);
   if (uiModeSelect) window.refreshCustomSelect(uiModeSelect);
   if (uiScaleSelect) window.refreshCustomSelect(uiScaleSelect);
+  if (uiThemeSelect) window.refreshCustomSelect(uiThemeSelect);
+  if (uiRadiusSelect) window.refreshCustomSelect(uiRadiusSelect);
+  if (uiMotionSelect) window.refreshCustomSelect(uiMotionSelect);
   if (uiWidthSelect) window.refreshCustomSelect(uiWidthSelect);
+  if (uiModalWidthSelect) window.refreshCustomSelect(uiModalWidthSelect);
+  if (uiNavSizeSelect) window.refreshCustomSelect(uiNavSizeSelect);
+  if (uiTableDensitySelect) window.refreshCustomSelect(uiTableDensitySelect);
   if (uiBackgroundSelect) window.refreshCustomSelect(uiBackgroundSelect);
+  if (searchDefaultSortSelect)
+    window.refreshCustomSelect(searchDefaultSortSelect);
+}
+
+function renderSettingsChipList(container, values) {
+  if (!container) return;
+  container.innerHTML = "";
+  const entries = Array.isArray(values) ? values.filter(Boolean) : [];
+  if (!entries.length) {
+    const chip = document.createElement("span");
+    chip.className = "settings-chip";
+    chip.textContent = "Unavailable";
+    container.appendChild(chip);
+    return;
+  }
+  entries.forEach((value) => {
+    const chip = document.createElement("span");
+    chip.className = "settings-chip";
+    chip.textContent = value;
+    container.appendChild(chip);
+  });
 }
 
 async function loadSettings() {
@@ -55,9 +107,50 @@ async function loadSettings() {
         experimentalFilmpalastCb.checked = data.experimental_filmpalast === "1";
       if (uiModeSelect) uiModeSelect.value = data.ui_mode || "cozy";
       if (uiScaleSelect) uiScaleSelect.value = data.ui_scale || "100";
+      if (uiThemeSelect) uiThemeSelect.value = data.ui_theme || "ocean";
+      if (uiRadiusSelect) uiRadiusSelect.value = data.ui_radius || "soft";
+      if (uiMotionSelect) uiMotionSelect.value = data.ui_motion || "normal";
       if (uiWidthSelect) uiWidthSelect.value = data.ui_width || "standard";
+      if (uiModalWidthSelect) {
+        uiModalWidthSelect.value = data.ui_modal_width || "standard";
+      }
+      if (uiNavSizeSelect) uiNavSizeSelect.value = data.ui_nav_size || "standard";
+      if (uiTableDensitySelect) {
+        uiTableDensitySelect.value = data.ui_table_density || "standard";
+      }
       if (uiBackgroundSelect) {
         uiBackgroundSelect.value = data.ui_background || "dynamic";
+      }
+      if (serverBindHostValue) {
+        serverBindHostValue.textContent = data.server_bind_host || "-";
+      }
+      if (serverPortValue) {
+        serverPortValue.textContent = String(data.server_port || "-");
+      }
+      if (serverScopeValue) {
+        serverScopeValue.textContent = data.server_scope || "-";
+      }
+      renderSettingsChipList(serverIpsWrap, data.server_ips || []);
+      renderSettingsChipList(serverAccessUrlsWrap, data.server_access_urls || []);
+      if (searchDefaultSortSelect) {
+        searchDefaultSortSelect.value = data.search_default_sort || "source";
+      }
+      if (searchDefaultGenresInput) {
+        searchDefaultGenresInput.value = data.search_default_genres || "";
+      }
+      if (searchDefaultYearFromInput) {
+        searchDefaultYearFromInput.value = data.search_default_year_from || "";
+      }
+      if (searchDefaultYearToInput) {
+        searchDefaultYearToInput.value = data.search_default_year_to || "";
+      }
+      if (searchDefaultFavoritesOnlyCb) {
+        searchDefaultFavoritesOnlyCb.checked =
+          data.search_default_favorites_only === "1";
+      }
+      if (searchDefaultDownloadedOnlyCb) {
+        searchDefaultDownloadedOnlyCb.checked =
+          data.search_default_downloaded_only === "1";
       }
       if (syncScheduleSelect && data.sync_schedule)
         syncScheduleSelect.value = data.sync_schedule;
@@ -146,7 +239,7 @@ async function saveExperimentalFilmpalast() {
     });
     showToast(
       "FilmPalast " +
-        (experimentalFilmpalastCb.checked ? "eingeblendet" : "ausgeblendet"),
+        (experimentalFilmpalastCb.checked ? "enabled" : "hidden"),
     );
   } catch (e) {
     showToast("Failed to save development setting: " + e.message);
@@ -179,6 +272,45 @@ async function saveUiScale() {
   }
 }
 
+async function saveUiTheme() {
+  if (!uiThemeSelect) return;
+  try {
+    await updateSettings({ ui_theme: uiThemeSelect.value });
+    if (typeof window.applyUiTheme === "function") {
+      window.applyUiTheme(uiThemeSelect.value);
+    }
+    showToast("Theme color saved");
+  } catch (e) {
+    showToast("Failed to save theme color: " + e.message);
+  }
+}
+
+async function saveUiRadius() {
+  if (!uiRadiusSelect) return;
+  try {
+    await updateSettings({ ui_radius: uiRadiusSelect.value });
+    if (typeof window.applyUiRadius === "function") {
+      window.applyUiRadius(uiRadiusSelect.value);
+    }
+    showToast("Card radius saved");
+  } catch (e) {
+    showToast("Failed to save card radius: " + e.message);
+  }
+}
+
+async function saveUiMotion() {
+  if (!uiMotionSelect) return;
+  try {
+    await updateSettings({ ui_motion: uiMotionSelect.value });
+    if (typeof window.applyUiMotion === "function") {
+      window.applyUiMotion(uiMotionSelect.value);
+    }
+    showToast("Animation speed saved");
+  } catch (e) {
+    showToast("Failed to save animation speed: " + e.message);
+  }
+}
+
 async function saveUiWidth() {
   if (!uiWidthSelect) return;
   try {
@@ -189,6 +321,45 @@ async function saveUiWidth() {
     showToast("Content width saved");
   } catch (e) {
     showToast("Failed to save content width: " + e.message);
+  }
+}
+
+async function saveUiModalWidth() {
+  if (!uiModalWidthSelect) return;
+  try {
+    await updateSettings({ ui_modal_width: uiModalWidthSelect.value });
+    if (typeof window.applyUiModalWidth === "function") {
+      window.applyUiModalWidth(uiModalWidthSelect.value);
+    }
+    showToast("Modal width saved");
+  } catch (e) {
+    showToast("Failed to save modal width: " + e.message);
+  }
+}
+
+async function saveUiNavSize() {
+  if (!uiNavSizeSelect) return;
+  try {
+    await updateSettings({ ui_nav_size: uiNavSizeSelect.value });
+    if (typeof window.applyUiNavSize === "function") {
+      window.applyUiNavSize(uiNavSizeSelect.value);
+    }
+    showToast("Navigation size saved");
+  } catch (e) {
+    showToast("Failed to save navigation size: " + e.message);
+  }
+}
+
+async function saveUiTableDensity() {
+  if (!uiTableDensitySelect) return;
+  try {
+    await updateSettings({ ui_table_density: uiTableDensitySelect.value });
+    if (typeof window.applyUiTableDensity === "function") {
+      window.applyUiTableDensity(uiTableDensitySelect.value);
+    }
+    showToast("Table density saved");
+  } catch (e) {
+    showToast("Failed to save table density: " + e.message);
   }
 }
 
@@ -203,6 +374,37 @@ async function saveUiBackground() {
   } catch (e) {
     showToast("Failed to save background effects: " + e.message);
   }
+}
+
+async function saveSearchDefaults() {
+  try {
+    await updateSettings({
+      search_default_sort: searchDefaultSortSelect?.value || "source",
+      search_default_genres: searchDefaultGenresInput?.value || "",
+      search_default_year_from: searchDefaultYearFromInput?.value || "",
+      search_default_year_to: searchDefaultYearToInput?.value || "",
+      search_default_favorites_only:
+        searchDefaultFavoritesOnlyCb?.checked || false,
+      search_default_downloaded_only:
+        searchDefaultDownloadedOnlyCb?.checked || false,
+    });
+    showToast("Search defaults saved");
+  } catch (e) {
+    showToast("Failed to save search defaults: " + e.message);
+  }
+}
+
+async function resetSearchDefaultsConfig() {
+  if (searchDefaultSortSelect) searchDefaultSortSelect.value = "source";
+  if (searchDefaultGenresInput) searchDefaultGenresInput.value = "";
+  if (searchDefaultYearFromInput) searchDefaultYearFromInput.value = "";
+  if (searchDefaultYearToInput) searchDefaultYearToInput.value = "";
+  if (searchDefaultFavoritesOnlyCb) searchDefaultFavoritesOnlyCb.checked = false;
+  if (searchDefaultDownloadedOnlyCb) {
+    searchDefaultDownloadedOnlyCb.checked = false;
+  }
+  refreshSettingsSelects();
+  await saveSearchDefaults();
 }
 
 async function saveDownloadPath() {
@@ -460,6 +662,12 @@ async function changeRole(id, newRole) {
 }
 
 function showToast(msg) {
+  if (
+    window.AniworldNotifications &&
+    typeof window.AniworldNotifications.add === "function"
+  ) {
+    window.AniworldNotifications.add(msg, { source: "Settings" });
+  }
   const t = document.getElementById("toast");
   t.textContent = msg;
   t.style.display = "block";

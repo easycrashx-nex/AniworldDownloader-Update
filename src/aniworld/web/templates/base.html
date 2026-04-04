@@ -25,9 +25,40 @@
   <body
     data-ui-density="{{ ui_mode|default('cozy') }}"
     data-ui-scale="{{ ui_scale|default('100') }}"
+    data-ui-theme="{{ ui_theme|default('ocean') }}"
+    data-ui-radius="{{ ui_radius|default('soft') }}"
+    data-ui-motion="{{ ui_motion|default('normal') }}"
     data-ui-width="{{ ui_width|default('standard') }}"
+    data-ui-modal-width="{{ ui_modal_width|default('standard') }}"
+    data-ui-nav-size="{{ ui_nav_size|default('standard') }}"
+    data-ui-table-density="{{ ui_table_density|default('standard') }}"
     data-ui-background="{{ ui_background|default('dynamic') }}"
+    data-current-user="{% if current_user %}{{ current_user.username }}{% endif %}"
   >
+    <script>
+      window.ANIWORLD_BOOT_SETTINGS = {
+        ui: {
+          mode: {{ ui_mode|default('cozy')|tojson }},
+          scale: {{ ui_scale|default('100')|tojson }},
+          theme: {{ ui_theme|default('ocean')|tojson }},
+          radius: {{ ui_radius|default('soft')|tojson }},
+          motion: {{ ui_motion|default('normal')|tojson }},
+          width: {{ ui_width|default('standard')|tojson }},
+          modalWidth: {{ ui_modal_width|default('standard')|tojson }},
+          navSize: {{ ui_nav_size|default('standard')|tojson }},
+          tableDensity: {{ ui_table_density|default('standard')|tojson }},
+          background: {{ ui_background|default('dynamic')|tojson }},
+        },
+        searchDefaults: {
+          sort: {{ search_default_sort|default('source')|tojson }},
+          genres: {{ search_default_genres|default('')|tojson }},
+          yearFrom: {{ search_default_year_from|default('')|tojson }},
+          yearTo: {{ search_default_year_to|default('')|tojson }},
+          favoritesOnly: {{ search_default_favorites_only|default('0')|tojson }},
+          downloadedOnly: {{ search_default_downloaded_only|default('0')|tojson }},
+        },
+      };
+    </script>
     <div class="app-background">
       <canvas
         class="network-canvas"
@@ -191,6 +222,40 @@
                   >Track account actions, queue changes, and sync activity.</span
                 >
               </a>
+            </div>
+          </div>
+
+          <div class="nav-menu nav-menu-notifications" id="notificationMenu">
+            <button
+              type="button"
+              class="top-bar-user nav-menu-trigger"
+              id="notificationTrigger"
+            >
+              Alerts
+              <span class="nav-badge" id="notificationBadge" style="display: none"
+                >0</span
+              >
+            </button>
+            <div class="nav-dropdown nav-dropdown-right notification-dropdown">
+              <div class="notification-dropdown-head">
+                <div class="nav-dropdown-static notification-dropdown-static">
+                  <span class="nav-dropdown-label">Notification Center</span>
+                  <span class="nav-dropdown-note"
+                    >Recent queue, sync, library, and settings notices.</span
+                  >
+                </div>
+                <button
+                  type="button"
+                  class="nav-dropdown-button notification-clear-btn"
+                  id="notificationClearBtn"
+                >
+                  Clear
+                </button>
+              </div>
+              <div class="notification-list" id="notificationCenterList"></div>
+              <div class="notification-empty" id="notificationCenterEmpty">
+                No notifications yet.
+              </div>
             </div>
           </div>
 

@@ -13,12 +13,36 @@
 
   <div class="page-panel">
     <div
-      class="dashboard-inline-actions"
-      style="justify-content: flex-end; margin-bottom: 14px"
+      class="dashboard-inline-actions autosync-toolbar"
+      style="justify-content: space-between; margin-bottom: 14px"
     >
-      <button class="btn-secondary btn-small" onclick="syncAllNow()">
-        Sync All Now
-      </button>
+      <div class="autosync-toolbar-status">
+        <span class="autosync-selection-count" id="autosyncSelectionCount"
+          >0 selected</span
+        >
+      </div>
+      <div class="autosync-toolbar-actions">
+        <button class="btn-secondary btn-small" onclick="selectAllAutosyncJobs()">
+          Select All
+        </button>
+        <button class="btn-secondary btn-small" onclick="clearAutosyncSelection()">
+          Clear
+        </button>
+        <button
+          id="autosyncSyncSelectedBtn"
+          class="btn-secondary btn-small autosync-toolbar-primary"
+          onclick="syncSelectedNow()"
+        >
+          Sync Selected
+        </button>
+        <button
+          id="autosyncSyncAllBtn"
+          class="btn-secondary btn-small autosync-toolbar-primary is-active"
+          onclick="syncAllNow()"
+        >
+          Sync All
+        </button>
+      </div>
     </div>
     <div id="autosyncList">
       <div class="queue-empty" id="autosyncEmpty">

@@ -1,6 +1,9 @@
 // Auto-Sync page logic
 
 const autosyncList = document.getElementById("autosyncList");
+const autosyncSelectionCount = document.getElementById("autosyncSelectionCount");
+const autosyncSyncSelectedBtn = document.getElementById("autosyncSyncSelectedBtn");
+const autosyncSyncAllBtn = document.getElementById("autosyncSyncAllBtn");
 
 const SCHEDULE_INTERVALS = {
   "1min": 60,
@@ -19,6 +22,77 @@ let customPathsCache = [];
 let langSepEnabled = false;
 let autosyncJobsRequest = null;
 let autosyncScheduleRequest = null;
+let currentJobs = [];
+const selectedAutosyncIds = new Set();
+let currentEditProvidersByLanguage = {};
+let currentEditAllLanguageProviders = [];
+let currentEditAllowsAllLanguages = false;
+
+function refreshEditCustomSelect(select) {
+  if (window.refreshCustomSelect && select) {
+    window.refreshCustomSelect(select);
+  }
+}
+
+function setSelectOptions(select, values, preferredValue, emptyLabel) {
+  if (!select) return "";
+  const cleanValues = Array.from(
+    new Set(
+      (values || [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean),
+    ),
+  );
+
+  select.innerHTML = "";
+  if (!cleanValues.length) {
+    const fallback = document.createElement("option");
+    fallback.value = "";
+    fallback.textContent = emptyLabel || "No options available";
+    select.appendChild(fallback);
+    select.value = "";
+    select.disabled = true;
+    refreshEditCustomSelect(select);
+    return "";
+  }
+
+  cleanValues.forEach((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    select.appendChild(option);
+  });
+
+  const nextValue = cleanValues.includes(preferredValue)
+    ? preferredValue
+    : cleanValues[0];
+  select.disabled = false;
+  select.value = nextValue;
+  refreshEditCustomSelect(select);
+  return nextValue;
+}
+
+function getEditProviderOptionsForLanguage(language) {
+  if (language === "All Languages") {
+    return currentEditAllLanguageProviders;
+  }
+  return currentEditProvidersByLanguage[language] || [];
+}
+
+function refreshEditProviderSelect(preferredProvider) {
+  const languageSelect = document.getElementById("editLanguage");
+  const providerSelect = document.getElementById("editProvider");
+  if (!languageSelect || !providerSelect) return;
+
+  const activeLanguage = languageSelect.value;
+  const providerOptions = getEditProviderOptionsForLanguage(activeLanguage);
+  setSelectOptions(
+    providerSelect,
+    providerOptions,
+    preferredProvider || providerSelect.value,
+    "No providers available",
+  );
+}
 
 async function loadSyncSchedule() {
   if (autosyncScheduleRequest) return autosyncScheduleRequest;
@@ -53,8 +127,13 @@ async function loadAutosyncJobs() {
     try {
       const res = await fetch("/api/autosync");
       const data = await res.json();
-      renderJobs(data.jobs || []);
+      currentJobs = data.jobs || [];
+      syncAutosyncSelectionState();
+      renderJobs(currentJobs);
     } catch (e) {
+      currentJobs = [];
+      selectedAutosyncIds.clear();
+      updateAutosyncSelectionToolbar();
       autosyncList.innerHTML =
         '<div class="queue-empty">Failed to load sync jobs.</div>';
     } finally {
@@ -62,6 +141,49 @@ async function loadAutosyncJobs() {
     }
   })();
   return autosyncJobsRequest;
+}
+
+function syncAutosyncSelectionState() {
+  const availableIds = new Set((currentJobs || []).map((job) => Number(job.id)));
+  Array.from(selectedAutosyncIds).forEach((id) => {
+    if (!availableIds.has(Number(id))) {
+      selectedAutosyncIds.delete(id);
+    }
+  });
+}
+
+function updateAutosyncSelectionToolbar() {
+  if (!autosyncSelectionCount) return;
+  const count = selectedAutosyncIds.size;
+  autosyncSelectionCount.textContent =
+    count === 1 ? "1 selected" : count + " selected";
+  if (autosyncSyncSelectedBtn) {
+    autosyncSyncSelectedBtn.classList.toggle("is-active", count > 0);
+  }
+  if (autosyncSyncAllBtn) {
+    autosyncSyncAllBtn.classList.toggle("is-active", count === 0);
+  }
+}
+
+function toggleAutosyncSelection(id, checked) {
+  const jobId = Number(id);
+  if (!Number.isFinite(jobId)) return;
+  if (checked) {
+    selectedAutosyncIds.add(jobId);
+  } else {
+    selectedAutosyncIds.delete(jobId);
+  }
+  updateAutosyncSelectionToolbar();
+}
+
+function selectAllAutosyncJobs() {
+  currentJobs.forEach((job) => selectedAutosyncIds.add(Number(job.id)));
+  renderJobs(currentJobs);
+}
+
+function clearAutosyncSelection() {
+  selectedAutosyncIds.clear();
+  renderJobs(currentJobs);
 }
 
 function computeNextCheck(lastCheck) {
@@ -108,6 +230,8 @@ function renderAutosyncMetaPill(label, value, modifier = "") {
 }
 
 function renderJobs(jobs) {
+  syncAutosyncSelectionState();
+  updateAutosyncSelectionToolbar();
   if (!jobs.length) {
     autosyncList.innerHTML =
       '<div class="queue-empty">No sync jobs yet. Add a series via the search page.</div>';
@@ -117,6 +241,7 @@ function renderJobs(jobs) {
   let html = '<div class="autosync-grid">';
 
   for (const job of jobs) {
+    const isSelected = selectedAutosyncIds.has(Number(job.id));
     const statusClass = job.enabled
       ? "queue-status-completed"
       : "queue-status-queued";
@@ -147,7 +272,18 @@ function renderJobs(jobs) {
     const userMeta = renderAutosyncMetaPill("User", job.added_by || "-", "user");
 
     html +=
-      '<article class="autosync-card">' +
+      '<article class="autosync-card' +
+      (isSelected ? " is-selected" : "") +
+      '">' +
+      '<label class="autosync-select-toggle" title="Select sync job">' +
+      '<input type="checkbox" class="autosync-select-checkbox" ' +
+      (isSelected ? "checked " : "") +
+      'onchange="toggleAutosyncSelection(' +
+      job.id +
+      ', this.checked)" />' +
+      '<span class="autosync-select-box"></span>' +
+      "</label>" +
+      '<div class="autosync-card-body">' +
       '<div class="autosync-card-head">' +
       '<div class="autosync-card-copy">' +
       '<div class="autosync-card-title" title="' +
@@ -198,6 +334,7 @@ function renderJobs(jobs) {
       providerMeta +
       pathMeta +
       userMeta +
+      "</div>" +
       "</div>" +
       "</article>";
   }
@@ -270,6 +407,36 @@ async function syncAllNow() {
   }
 }
 
+async function syncSelectedNow() {
+  if (!selectedAutosyncIds.size) {
+    showToast("No sync jobs selected");
+    return;
+  }
+  try {
+    const res = await fetch("/api/autosync/sync-selected", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: Array.from(selectedAutosyncIds) }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
+      if (data.started && skipped) {
+        showToast("Started " + data.started + " selected job(s), skipped " + skipped);
+      } else if (data.started) {
+        showToast("Started " + data.started + " selected job(s)");
+      } else {
+        showToast(skipped ? "Selected jobs were skipped" : "No selected jobs were started");
+      }
+      setTimeout(loadAutosyncJobs, 1200);
+    } else {
+      showToast(data.error || "Failed to start selected sync jobs");
+    }
+  } catch (e) {
+    showToast("Failed to start selected sync jobs");
+  }
+}
+
 async function removeJob(id) {
   if (!confirm("Remove this sync job?")) return;
   try {
@@ -286,13 +453,14 @@ async function removeJob(id) {
   }
 }
 
-let currentJobs = [];
-
 async function openEditModal(id) {
   try {
-    const res = await fetch("/api/autosync");
-    const data = await res.json();
-    currentJobs = data.jobs || [];
+    if (!currentJobs.length) {
+      const res = await fetch("/api/autosync");
+      const data = await res.json();
+      currentJobs = data.jobs || [];
+      syncAutosyncSelectionState();
+    }
     const job = currentJobs.find((entry) => entry.id === id);
     if (!job) {
       showToast("Job not found");
@@ -304,23 +472,47 @@ async function openEditModal(id) {
       job.title || "Unknown";
 
     const langSelect = document.getElementById("editLanguage");
-    langSelect.innerHTML = "";
-    if (langSepEnabled) {
-      const allOpt = document.createElement("option");
-      allOpt.value = "All Languages";
-      allOpt.textContent = "All Languages";
-      langSelect.appendChild(allOpt);
-    }
-    ["German Dub", "English Sub", "German Sub"].forEach((language) => {
-      const opt = document.createElement("option");
-      opt.value = language;
-      opt.textContent = language;
-      langSelect.appendChild(opt);
-    });
-    langSelect.value = job.language || "German Dub";
-
     const providerSelect = document.getElementById("editProvider");
-    providerSelect.value = job.provider || "VOE";
+    let optionPayload = null;
+    try {
+      const optionResponse = await fetch("/api/autosync/" + id + "/options");
+      optionPayload = await optionResponse.json();
+    } catch (e) {
+      optionPayload = null;
+    }
+
+    currentEditProvidersByLanguage =
+      (optionPayload && optionPayload.providers_by_language) || {
+        [job.language || "German Dub"]: [job.provider || "VOE"],
+      };
+    currentEditAllLanguageProviders =
+      (optionPayload && optionPayload.all_language_providers) ||
+      (job.language === "All Languages" ? [job.provider || "VOE"] : []);
+    currentEditAllowsAllLanguages = Boolean(
+      (optionPayload && optionPayload.allow_all_languages) ||
+        (langSepEnabled && Object.keys(currentEditProvidersByLanguage).length > 1) ||
+        job.language === "All Languages",
+    );
+
+    const languages =
+      (optionPayload && optionPayload.languages) ||
+      Object.keys(currentEditProvidersByLanguage);
+    const languageOptions = currentEditAllowsAllLanguages
+      ? ["All Languages"].concat(languages)
+      : languages;
+    const preferredLanguage =
+      (optionPayload && optionPayload.selected_language) ||
+      job.language ||
+      "German Dub";
+    setSelectOptions(
+      langSelect,
+      languageOptions,
+      preferredLanguage,
+      "No languages available",
+    );
+    refreshEditProviderSelect(
+      (optionPayload && optionPayload.selected_provider) || job.provider || "VOE",
+    );
 
     const enabledSelect = document.getElementById("editEnabled");
     enabledSelect.value = job.enabled ? "1" : "0";
@@ -337,10 +529,10 @@ async function openEditModal(id) {
     pathSelect.value = job.custom_path_id ? String(job.custom_path_id) : "";
 
     if (window.refreshCustomSelect) {
-      window.refreshCustomSelect(langSelect);
-      window.refreshCustomSelect(providerSelect);
-      window.refreshCustomSelect(enabledSelect);
-      window.refreshCustomSelect(pathSelect);
+      refreshEditCustomSelect(langSelect);
+      refreshEditCustomSelect(providerSelect);
+      refreshEditCustomSelect(enabledSelect);
+      refreshEditCustomSelect(pathSelect);
     }
 
     document.getElementById("editOverlay").style.display = "block";
@@ -356,9 +548,14 @@ function closeEditModal() {
 async function saveEdit() {
   const id = document.getElementById("editJobId").value;
   const pathVal = document.getElementById("editPath").value;
+  const providerSelect = document.getElementById("editProvider");
+  if (providerSelect && providerSelect.disabled) {
+    showToast("No valid providers available for this selection");
+    return;
+  }
   const body = {
     language: document.getElementById("editLanguage").value,
-    provider: document.getElementById("editProvider").value,
+    provider: providerSelect.value,
     enabled: parseInt(document.getElementById("editEnabled").value, 10),
     custom_path_id: pathVal ? parseInt(pathVal, 10) : null,
   };
@@ -383,6 +580,12 @@ async function saveEdit() {
 }
 
 function showToast(msg) {
+  if (
+    window.AniworldNotifications &&
+    typeof window.AniworldNotifications.add === "function"
+  ) {
+    window.AniworldNotifications.add(msg, { source: "Auto-Sync" });
+  }
   const toast = document.getElementById("toast");
   toast.textContent = msg;
   toast.style.display = "block";
@@ -399,6 +602,13 @@ function esc(value) {
 }
 
 Promise.all([loadSyncSchedule(), loadCustomPathsForEdit()]).then(loadAutosyncJobs);
+
+const editLanguageSelect = document.getElementById("editLanguage");
+if (editLanguageSelect) {
+  editLanguageSelect.addEventListener("change", function () {
+    refreshEditProviderSelect();
+  });
+}
 
 if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
   window.LiveUpdates.subscribe(["autosync", "settings"], function () {
