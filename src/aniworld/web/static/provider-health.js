@@ -27,10 +27,14 @@ function renderProviderHealth(items) {
         <article class="provider-health-card provider-health-${tone}">
           <div class="provider-health-head">
             <div>
+              <div class="provider-health-rank">#${Number(item.rank || 0)}</div>
               <div class="provider-health-name">${escProviderHealth(item.provider || "Unknown")}</div>
               <div class="provider-health-status">${escProviderHealth((item.health || "idle").toUpperCase())}</div>
             </div>
-            <div class="provider-health-rate">${Number(item.success_rate || 0)}%</div>
+            <div class="provider-health-score-wrap">
+              <div class="provider-health-score">${Number(item.score || 0)}</div>
+              <div class="provider-health-rate">${Number(item.success_rate || 0)}%</div>
+            </div>
           </div>
           <div class="provider-health-metrics">
             <span>${Number(item.running || 0)} running</span>

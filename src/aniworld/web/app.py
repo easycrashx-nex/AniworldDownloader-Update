@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import re
+import shutil
 import socket
 import threading
 import time
@@ -42,6 +43,7 @@ from .db import (
     cancel_queue_item,
     clear_completed,
     delete_completed_queue_item,
+    delete_download_history_item,
     find_autosync_by_url,
     get_activity_chart,
     get_autosync_job,
@@ -186,6 +188,81 @@ def _server_network_info(app):
         "server_ips": ip_addresses,
         "server_access_urls": access_urls,
         "server_scope": "Local only" if is_local_only else "LAN / exposed",
+    }
+
+
+def _disk_guard_snapshot():
+    from pathlib import Path
+
+    try:
+        warn_gb = float(os.environ.get("ANIWORLD_DISK_WARN_GB", "10"))
+    except ValueError:
+        warn_gb = 10.0
+    try:
+        warn_pct = float(os.environ.get("ANIWORLD_DISK_WARN_PERCENT", "12"))
+    except ValueError:
+        warn_pct = 12.0
+
+    targets = []
+    seen = set()
+
+    def _add_target(label, path_value):
+        raw_path = str(path_value or "").strip()
+        if not raw_path:
+            return
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = Path.home() / path
+        key = str(path).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        targets.append((label, path))
+
+    _add_target("Default", _resolved_download_path_value())
+    for custom_path in get_custom_paths():
+        _add_target(custom_path.get("name") or "Custom", custom_path.get("path"))
+
+    items = []
+    overall = "healthy"
+    for label, path in targets:
+        try:
+            usage = shutil.disk_usage(path)
+            free_gb = round(usage.free / (1024**3), 2)
+            total_gb = round(usage.total / (1024**3), 2)
+            used_percent = round((usage.used / usage.total) * 100, 1) if usage.total else 0
+            free_percent = round((usage.free / usage.total) * 100, 1) if usage.total else 0
+            status = "healthy"
+            if free_gb <= warn_gb or free_percent <= warn_pct:
+                status = "warning"
+                overall = "warning"
+            items.append(
+                {
+                    "label": label,
+                    "path": str(path),
+                    "total_gb": total_gb,
+                    "free_gb": free_gb,
+                    "used_percent": used_percent,
+                    "free_percent": free_percent,
+                    "status": status,
+                }
+            )
+        except Exception as exc:
+            overall = "warning"
+            items.append(
+                {
+                    "label": label,
+                    "path": str(path),
+                    "status": "unknown",
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "status": overall,
+        "warn_free_gb": warn_gb,
+        "warn_free_percent": warn_pct,
+        "paths": items,
     }
 
 
@@ -429,6 +506,7 @@ def _settings_payload(
         "browser_notify_library": _normalize_pref_bool(browser_notify_library),
         "browser_notify_settings": _normalize_pref_bool(browser_notify_settings),
         "browser_notify_system": _normalize_pref_bool(browser_notify_system),
+        "disk_guard": _disk_guard_snapshot(),
     }
 
 
@@ -695,6 +773,8 @@ def _scan_library_snapshot(include_meta=True):
                 season_num = int(match.group(1))
                 episode_num = int(match.group(2))
                 is_video = file_path.suffix.lower() in video_exts
+                if not is_video:
+                    continue
                 try:
                     file_size = file_path.stat().st_size
                 except OSError:
@@ -711,7 +791,7 @@ def _scan_library_snapshot(include_meta=True):
                             "episode": episode_num,
                             "file": file_path.name,
                             "size": file_size,
-                            "is_video": is_video,
+                            "is_video": True,
                         }
                     )
                     entry["total_size"] += file_size
@@ -1472,7 +1552,9 @@ def _compare_title_with_source(title):
         "local_total_episodes": local_index.get("total_episodes", 0),
         "missing_count": len(missing),
         "extra_count": len(extra),
+        "missing": missing,
         "missing_sample": missing[:8],
+        "extra": extra,
         "extra_sample": extra[:6],
         "in_sync": not missing,
     }
@@ -1527,6 +1609,39 @@ def _get_cached_library_compare(refresh=False):
 
     payload = {"items": items, "summary": summary, "checked_at": int(time.time())}
     return _cache_set(cache_key, payload)
+
+
+def _language_label_from_library_folder(name):
+    mapping = {
+        "german-dub": "German Dub",
+        "english-sub": "English Sub",
+        "german-sub": "German Sub",
+        "english-dub": "English Dub",
+    }
+    return mapping.get(str(name or "").strip().lower(), "German Dub")
+
+
+def _resolve_missing_episode_urls(series_url, missing_labels):
+    if not series_url or not missing_labels:
+        return []
+    wanted = {str(label).strip().upper() for label in missing_labels if str(label).strip()}
+    if not wanted:
+        return []
+
+    prov = resolve_provider(series_url)
+    if not prov.series_cls or not prov.season_cls:
+        return []
+
+    series = prov.series_cls(url=series_url)
+    matches = []
+    for season_ref in list(getattr(series, "seasons", []) or []):
+        season_obj = prov.season_cls(url=season_ref.url, series=series)
+        for episode in list(getattr(season_obj, "episodes", []) or []):
+            label = f"S{int(getattr(season_obj, 'season_number', 0)):02d}E{int(getattr(episode, 'episode_number', 0)):03d}"
+            if label in wanted:
+                matches.append((label, episode.url, episode))
+    matches.sort(key=lambda item: item[0])
+    return matches
 
 
 def _get_cached_stats_payload(username=None):
@@ -3740,6 +3855,22 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
         username, _ = _get_current_user_info()
         return jsonify({"items": get_download_history(limit, username=username)})
 
+    @app.route("/api/history/<int:queue_id>", methods=["DELETE"])
+    def api_history_delete(queue_id):
+        username, _ = _get_current_user_info()
+        deleted = delete_download_history_item(queue_id, username=username)
+        if not deleted:
+            return jsonify({"error": "History item not found"}), 404
+        record_audit_event(
+            "history.deleted",
+            username=username,
+            subject_type="history",
+            subject=deleted.get("title") or str(queue_id),
+            details={"queue_id": queue_id, "status": deleted.get("status")},
+        )
+        _emit_ui_event("dashboard", "nav", min_interval=0.2)
+        return jsonify({"ok": True})
+
     @app.route("/api/audit")
     def api_audit():
         try:
@@ -3778,6 +3909,162 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     def api_library_compare():
         refresh = str(request.args.get("refresh", "0")).strip() == "1"
         return jsonify(_get_cached_library_compare(refresh=refresh))
+
+    @app.route("/api/library/queue-missing", methods=["POST"])
+    def api_library_queue_missing():
+        data = request.get_json(silent=True) or {}
+        series_url = str(data.get("series_url") or "").strip()
+        title = str(data.get("title") or "").strip() or "Unknown"
+        missing_labels = data.get("missing_labels") or []
+        language = str(data.get("language") or "").strip() or "German Dub"
+        preferred_provider = str(data.get("provider") or "").strip() or None
+        custom_path_id = data.get("custom_path_id")
+
+        if not series_url:
+            return jsonify({"error": "series_url is required"}), 400
+        if not isinstance(missing_labels, list) or not missing_labels:
+            return jsonify({"error": "missing_labels are required"}), 400
+        if (
+            language == "English Sub"
+            and os.environ.get("ANIWORLD_DISABLE_ENGLISH_SUB", "0") == "1"
+        ):
+            return jsonify({"error": "English Sub downloads are disabled"}), 403
+
+        username = None
+        if auth_enabled:
+            user = get_current_user()
+            if user:
+                username = (
+                    user.get("username")
+                    if isinstance(user, dict)
+                    else getattr(user, "username", None)
+                )
+
+        resolved = _resolve_missing_episode_urls(series_url, missing_labels)
+        if not resolved:
+            return jsonify({"error": "No matching missing episodes found"}), 404
+
+        provider_options = {}
+        common_providers = None
+        for label, ep_url, episode_obj in resolved:
+            options = list(
+                _extract_provider_info(getattr(episode_obj, "provider_data", None)).get(
+                    language, []
+                )
+                or []
+            )
+            provider_options[label] = {"url": ep_url, "options": options}
+            option_set = set(options)
+            common_providers = (
+                option_set
+                if common_providers is None
+                else common_providers & option_set
+            )
+
+        selected_provider = None
+        if common_providers:
+            if preferred_provider and preferred_provider in common_providers:
+                selected_provider = preferred_provider
+            else:
+                for provider_name in _WORKING_PROVIDER_PREFERENCE:
+                    if provider_name in common_providers:
+                        selected_provider = provider_name
+                        break
+                if not selected_provider:
+                    selected_provider = sorted(common_providers)[0]
+            episode_urls = [item[1] for item in resolved]
+            skipped_unavailable = 0
+        else:
+            provider_counts = {}
+            for item in provider_options.values():
+                for provider_name in item["options"]:
+                    provider_counts[provider_name] = (
+                        provider_counts.get(provider_name, 0) + 1
+                    )
+            if preferred_provider and preferred_provider in provider_counts:
+                selected_provider = preferred_provider
+            elif provider_counts:
+                selected_provider = sorted(
+                    provider_counts.items(),
+                    key=lambda pair: (
+                        -pair[1],
+                        _WORKING_PROVIDER_PREFERENCE.index(pair[0])
+                        if pair[0] in _WORKING_PROVIDER_PREFERENCE
+                        else 999,
+                        pair[0],
+                    ),
+                )[0][0]
+            if not selected_provider:
+                return (
+                    jsonify(
+                        {
+                            "error": f"No provider is available for {language} on the missing episodes."
+                        }
+                    ),
+                    409,
+                )
+            episode_urls = [
+                item["url"]
+                for item in provider_options.values()
+                if selected_provider in item["options"]
+            ]
+            skipped_unavailable = len(resolved) - len(episode_urls)
+
+        conflict_guard = _filter_conflicting_queue_episodes(
+            series_url,
+            language,
+            episode_urls,
+        )
+        queueable_episodes = conflict_guard["episodes"]
+        if not queueable_episodes:
+            return (
+                jsonify(
+                    {
+                        "error": "Missing episodes are already queued or currently downloading.",
+                        "type": "queue_conflict",
+                        "skipped_conflicts": conflict_guard["skipped"],
+                        "skipped_unavailable": skipped_unavailable,
+                        "conflicts": conflict_guard["conflicts"],
+                    }
+                ),
+                409,
+            )
+
+        queue_id = add_to_queue(
+            title,
+            series_url,
+            queueable_episodes,
+            language,
+            selected_provider,
+            username,
+            custom_path_id=custom_path_id,
+            source="library:missing",
+        )
+        _record_user_event(
+            "library.missing_queued",
+            subject_type="library",
+            subject=title,
+            details={
+                "queue_id": queue_id,
+                "series_url": series_url,
+                "language": language,
+                "provider": selected_provider,
+                "queued_episodes": len(queueable_episodes),
+                "requested_missing": len(missing_labels),
+                "skipped_unavailable": skipped_unavailable,
+                "skipped_conflicts": conflict_guard["skipped"],
+            },
+        )
+        _emit_ui_event("queue", "dashboard", "library", "nav")
+        return jsonify(
+            {
+                "queue_id": queue_id,
+                "provider": selected_provider,
+                "queued_episodes": len(queueable_episodes),
+                "skipped_unavailable": skipped_unavailable,
+                "skipped_conflicts": conflict_guard["skipped"],
+            }
+        )
 
     @app.route("/api/library/delete", methods=["POST"])
     def api_library_delete():

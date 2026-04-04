@@ -20,6 +20,7 @@ const serverPortValue = document.getElementById("serverPort");
 const serverScopeValue = document.getElementById("serverScope");
 const serverIpsWrap = document.getElementById("serverIps");
 const serverAccessUrlsWrap = document.getElementById("serverAccessUrls");
+const diskGuardList = document.getElementById("diskGuardList");
 const browserNotificationsEnabledCb = document.getElementById(
   "browserNotificationsEnabled",
 );
@@ -109,6 +110,52 @@ function renderSettingsChipList(container, values) {
     chip.textContent = value;
     container.appendChild(chip);
   });
+}
+
+function escapeSettingsHtml(value) {
+  const div = document.createElement("div");
+  div.textContent = value == null ? "" : String(value);
+  return div.innerHTML;
+}
+
+function renderDiskGuard(data) {
+  if (!diskGuardList) return;
+  const items = Array.isArray(data?.paths) ? data.paths : [];
+  if (!items.length) {
+    diskGuardList.innerHTML =
+      '<div class="settings-disk-card"><strong>Unavailable</strong><span>No storage information could be collected.</span></div>';
+    return;
+  }
+  diskGuardList.innerHTML = items
+    .map((item) => {
+      const tone =
+        item.status === "warning"
+          ? "warning"
+          : item.status === "unknown"
+            ? "unknown"
+            : "healthy";
+      const detail = item.error
+        ? item.error
+        : `${Number(item.free_gb || 0).toFixed(2)} GB free · ${Number(
+            item.free_percent || 0,
+          ).toFixed(1)}% free`;
+      return (
+        '<div class="settings-disk-card settings-disk-card-' +
+        tone +
+        '">' +
+        "<strong>" +
+        escapeSettingsHtml(item.label) +
+        "</strong>" +
+        '<span class="settings-disk-path">' +
+        escapeSettingsHtml(item.path) +
+        "</span>" +
+        '<span class="settings-disk-meta">' +
+        escapeSettingsHtml(detail) +
+        "</span>" +
+        "</div>"
+      );
+    })
+    .join("");
 }
 
 function browserNotificationsSupported() {
@@ -226,6 +273,7 @@ async function loadSettings() {
       }
       renderSettingsChipList(serverIpsWrap, data.server_ips || []);
       renderSettingsChipList(serverAccessUrlsWrap, data.server_access_urls || []);
+      renderDiskGuard(data.disk_guard || null);
       applyBrowserNotificationPrefsClient(data);
       if (searchDefaultSortSelect) {
         searchDefaultSortSelect.value = data.search_default_sort || "source";

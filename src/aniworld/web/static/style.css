@@ -1792,6 +1792,32 @@ h1 {
   font-size: 0.8rem;
 }
 
+.library-missing-wrap {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.library-missing-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.library-missing-chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 193, 92, 0.1);
+  border: 1px solid rgba(255, 193, 92, 0.18);
+  color: #ffd79b;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.library-missing-action {
+  width: fit-content;
+}
+
 .activity-list,
 .release-list,
 .provider-quality-list {
@@ -1897,6 +1923,59 @@ h1 {
 .provider-health-card {
   display: grid;
   gap: 12px;
+}
+
+.provider-health-rank {
+  color: var(--blue);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.provider-health-score-wrap {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.provider-health-score {
+  font-size: 1.35rem;
+  font-weight: 900;
+  color: var(--text);
+  line-height: 1;
+}
+
+.settings-disk-list {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-disk-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.settings-disk-card-warning {
+  border-color: rgba(255, 193, 92, 0.32);
+  background: rgba(255, 193, 92, 0.08);
+}
+
+.settings-disk-card-unknown {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.settings-disk-path,
+.settings-disk-meta {
+  color: var(--muted);
+  font-size: 0.84rem;
+  word-break: break-word;
 }
 
 .provider-health-head,
@@ -2671,6 +2750,17 @@ h1 {
   border-color: color-mix(in srgb, var(--blue) 34%, transparent);
   color: color-mix(in srgb, var(--text) 88%, var(--blue) 12%);
   box-shadow: var(--btn-accent-soft-shadow);
+}
+
+.btn-danger-soft {
+  background: rgba(255, 138, 138, 0.1);
+  color: #ffd6d6;
+  border: 1px solid rgba(255, 138, 138, 0.18);
+}
+
+.btn-danger-soft:hover {
+  background: rgba(255, 138, 138, 0.16);
+  border-color: rgba(255, 138, 138, 0.26);
 }
 
 .queue-action-primary:hover,

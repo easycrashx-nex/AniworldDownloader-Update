@@ -380,6 +380,36 @@ def init_queue_db():
         conn.close()
 
 
+def _queue_source_priority(source):
+    value = str(source or "manual").strip().lower()
+    if value.startswith("retry"):
+        return 1
+    if value.startswith("sync"):
+        return 2
+    return 0
+
+
+def _rebalance_queued_positions(conn):
+    rows = conn.execute(
+        "SELECT id, source, total_episodes, created_at FROM download_queue "
+        "WHERE status = 'queued'"
+    ).fetchall()
+    ordered = sorted(
+        rows,
+        key=lambda row: (
+            _queue_source_priority(row["source"]),
+            int(row["total_episodes"] or 0),
+            row["created_at"] or "",
+            row["id"],
+        ),
+    )
+    for idx, row in enumerate(ordered, start=1):
+        conn.execute(
+            "UPDATE download_queue SET position = ? WHERE id = ?",
+            (idx, row["id"]),
+        )
+
+
 def add_to_queue(
     title,
     series_url,
@@ -413,6 +443,7 @@ def add_to_queue(
         conn.execute(
             "UPDATE download_queue SET position = ? WHERE id = ?", (row_id, row_id)
         )
+        _rebalance_queued_positions(conn)
         conn.commit()
         return row_id
     finally:
@@ -499,6 +530,7 @@ def move_queue_item(queue_id, direction):
             "UPDATE download_queue SET position = ? WHERE id = ?",
             (item["position"], neighbor["id"]),
         )
+        _rebalance_queued_positions(conn)
         conn.commit()
         return True, None
     finally:
@@ -629,6 +661,7 @@ def remove_from_queue(queue_id):
         if row["status"] != "queued":
             return False, "Can only remove queued items"
         conn.execute("DELETE FROM download_queue WHERE id = ?", (queue_id,))
+        _rebalance_queued_positions(conn)
         conn.commit()
         return True, None
     finally:
@@ -656,7 +689,29 @@ def clear_completed():
         conn.execute(
             "DELETE FROM download_queue WHERE status IN ('completed', 'failed', 'cancelled')"
         )
+        _rebalance_queued_positions(conn)
         conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_download_history_item(queue_id, username=None):
+    scope_username = _scope_username(username)
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT queue_id, title, status FROM download_archive "
+            "WHERE queue_id = ? AND COALESCE(username, '') = ?",
+            (queue_id, scope_username),
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute(
+            "DELETE FROM download_archive WHERE queue_id = ? AND COALESCE(username, '') = ?",
+            (queue_id, scope_username),
+        )
+        conn.commit()
+        return dict(row)
     finally:
         conn.close()
 
@@ -1653,11 +1708,25 @@ def get_provider_health(username=None):
                 health = "watch"
             else:
                 health = "poor"
+            score = max(
+                0,
+                min(
+                    100,
+                    round(
+                        success_rate
+                        + min(item["completed"], 25)
+                        - min(item["failed"] * 4, 28)
+                        - min(item["failed_24h"] * 6, 18)
+                        + min(item["running"] * 2 + item["queued"], 8)
+                    ),
+                ),
+            )
             ordered.append(
                 {
                     **item,
                     "success_rate": success_rate,
                     "health": health,
+                    "score": score,
                 }
             )
 
@@ -1665,11 +1734,14 @@ def get_provider_health(username=None):
         ordered.sort(
             key=lambda item: (
                 priority.get(item["health"], 9),
+                -item["score"],
                 -(item["running"] + item["queued"]),
                 -(item["completed"] + item["failed"]),
                 item["provider"],
             )
         )
+        for rank, item in enumerate(ordered, start=1):
+            item["rank"] = rank
         return ordered
     finally:
         conn.close()
@@ -1728,13 +1800,14 @@ def retry_queue_item(queue_id, provider_override=None):
                 provider_override or row["provider"],
                 row["username"],
                 row["custom_path_id"],
-                row["source"],
+                f"retry:{row['source'] or 'manual'}",
             ),
         )
         new_id = cur.lastrowid
         conn.execute(
             "UPDATE download_queue SET position = ? WHERE id = ?", (new_id, new_id)
         )
+        _rebalance_queued_positions(conn)
         conn.commit()
         return new_id, None
     finally:
@@ -1764,7 +1837,7 @@ def retry_failed_queue_items(provider_overrides=None):
                     (provider_overrides or {}).get(row["id"]) or row["provider"],
                     row["username"],
                     row["custom_path_id"],
-                    row["source"],
+                    f"retry:{row['source'] or 'manual'}",
                 ),
             )
             new_id = cur.lastrowid
@@ -1773,6 +1846,7 @@ def retry_failed_queue_items(provider_overrides=None):
                 (new_id, new_id),
             )
             created += 1
+        _rebalance_queued_positions(conn)
         conn.commit()
         return created
     finally:

@@ -1181,6 +1181,9 @@ function renderActivity(items) {
         item.status === "failed" || item.status === "cancelled"
           ? `<button class="btn-secondary btn-small" onclick="retryQueueItemFromDashboard(${item.id})">Retry</button>`
           : "";
+      const deleteBtn = isTimelinePage
+        ? `<button class="btn-secondary btn-small btn-danger-soft" onclick="deleteHistoryItem(${item.id})">Delete</button>`
+        : "";
       const errorHtml = errors.length
         ? `<div class="activity-error-list">${errors
             .slice(0, 2)
@@ -1207,8 +1210,8 @@ function renderActivity(items) {
           </div>
           ${errorHtml}
           ${
-            retryBtn
-              ? `<div class="activity-actions">${retryBtn}</div>`
+            retryBtn || deleteBtn
+              ? `<div class="activity-actions">${retryBtn}${deleteBtn}</div>`
               : ""
           }
         </div>`;
@@ -1643,6 +1646,25 @@ async function retryQueueItemFromDashboard(id) {
     }
   } catch (e) {
     showToast("Retry failed");
+  }
+}
+
+async function deleteHistoryItem(id) {
+  try {
+    const resp = await fetch("/api/history/" + id, { method: "DELETE" });
+    const data = await resp.json();
+    if (!resp.ok || data.error) {
+      showToast(data.error || "Delete failed");
+      return;
+    }
+    showToast("History item deleted");
+    if (isTimelinePage) {
+      loadTimelinePage();
+    } else {
+      loadDashboard();
+    }
+  } catch (e) {
+    showToast("Delete failed");
   }
 }
 

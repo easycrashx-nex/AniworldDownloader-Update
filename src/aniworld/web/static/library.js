@@ -261,6 +261,72 @@ function buildTitleInsights(title) {
   };
 }
 
+function getLibraryLanguageLabel(langFolder) {
+  if (!langFolder) return "German Dub";
+  const map = {
+    "german-dub": "German Dub",
+    "english-sub": "English Sub",
+    "german-sub": "German Sub",
+    "english-dub": "English Dub",
+  };
+  return map[String(langFolder).toLowerCase()] || "German Dub";
+}
+
+async function queueMissingLibraryEpisodes(seriesUrl, title, langFolder, missingLabels) {
+  const labels = Array.isArray(missingLabels)
+    ? missingLabels.filter(Boolean)
+    : [];
+  if (!seriesUrl || !labels.length) {
+    showToast("No missing episodes available");
+    return;
+  }
+
+  try {
+    const resp = await fetch("/api/library/queue-missing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        series_url: seriesUrl,
+        title: title,
+        language: getLibraryLanguageLabel(langFolder),
+        missing_labels: labels,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) {
+      showToast(data.error || "Missing episodes could not be queued");
+      return;
+    }
+    const skipped = Number(data.skipped_conflicts || 0) + Number(data.skipped_unavailable || 0);
+    showToast(
+      skipped > 0
+        ? `Queued ${data.queued_episodes} missing episode(s), skipped ${skipped}`
+        : `Queued ${data.queued_episodes} missing episode(s)`,
+    );
+    if (window.LiveUpdates && typeof window.LiveUpdates.refresh === "function") {
+      window.LiveUpdates.refresh(["queue", "library", "dashboard", "nav"]);
+    }
+  } catch (e) {
+    showToast("Missing episodes could not be queued");
+  }
+}
+
+function queueMissingLibraryEpisodesFromButton(button) {
+  if (!button) return;
+  let missingLabels = [];
+  try {
+    missingLabels = JSON.parse(button.dataset.missing || "[]");
+  } catch (e) {
+    missingLabels = [];
+  }
+  queueMissingLibraryEpisodes(
+    button.dataset.seriesUrl || "",
+    button.dataset.title || "",
+    button.dataset.languageFolder || "",
+    missingLabels,
+  );
+}
+
 function matchesIssueFilter(title, issueValue) {
   if (!issueValue) return true;
   var insights = title.insights || buildTitleInsights(title);
@@ -650,6 +716,10 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
             " episode gaps detected</span>",
         );
       } else if (title.insights.sourceMissingCount > 0) {
+        const missingList =
+          title.compare && Array.isArray(title.compare.missing)
+            ? title.compare.missing
+            : [];
         html.push(
           '<span class="library-title-insight-warning">' +
             title.insights.sourceMissingCount +
@@ -657,6 +727,25 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
             escLib(comparePreview) +
             "</span>",
         );
+        if (missingList.length) {
+          html.push('<div class="library-missing-wrap">');
+          html.push('<div class="library-missing-list">');
+          missingList.forEach(function (label) {
+            html.push(
+              '<span class="library-missing-chip">' + escLib(label) + "</span>",
+            );
+          });
+          html.push("</div>");
+          html.push(
+            '<button class="btn-secondary btn-small library-missing-action" ' +
+              'data-series-url="' + escLib(title.series_url || "") + '" ' +
+              'data-title="' + escLib(title.folder || "") + '" ' +
+              'data-language-folder="' + escLib(langFolder || "") + '" ' +
+              'data-missing=\'' + escLib(JSON.stringify(missingList)) + '\' ' +
+              'onclick="event.stopPropagation();queueMissingLibraryEpisodesFromButton(this)">Queue Missing</button>',
+          );
+          html.push("</div>");
+        }
       } else if (title.insights.duplicateCount > 0) {
         html.push(
           '<span class="library-title-insight-warning">' +

@@ -155,6 +155,14 @@ function queueMetaPill(label, value, modifier = "") {
   );
 }
 
+function getQueuePriorityLabel(item) {
+  const source = String(item.source || "manual").toLowerCase();
+  if (source.startsWith("retry")) return "Retry";
+  if (source.startsWith("sync")) return "Auto-Sync";
+  if (source.startsWith("library:missing")) return "Library Repair";
+  return "Manual";
+}
+
 function getQueueEpisodeMarker(item) {
   const parsed = parseSeasonEpisode(item.current_url || "");
   if (parsed) return parsed;
@@ -439,6 +447,10 @@ function renderQueue(items) {
     const syncMeta = (item.source || "").startsWith("sync")
       ? queueMetaPill("Source", "Auto-Sync", "sync")
       : "";
+    const priorityMeta =
+      item.status === "queued"
+        ? queueMetaPill("Priority", getQueuePriorityLabel(item), "source")
+        : "";
     const episodeMeta = queueMetaPill(
       "Episode",
       getQueueEpisodeMarker(item),
@@ -471,6 +483,7 @@ function renderQueue(items) {
       episodeMeta +
       languageMeta +
       providerMeta +
+      priorityMeta +
       pathHtml +
       userMeta +
       syncMeta +
