@@ -10,6 +10,8 @@ import threading
 import time
 from collections import deque
 from io import BytesIO
+from pathlib import Path
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from flask import (
@@ -62,9 +64,11 @@ from .db import (
     get_custom_path_by_id,
     get_custom_paths,
     get_download_history,
+    get_download_session_history,
     get_favorite,
     get_general_stats,
     get_provider_quality,
+    get_provider_failure_analytics,
     get_provider_health,
     get_provider_score_history,
     get_search_suggestions,
@@ -132,6 +136,7 @@ _ENV_DISK_WARN_GB = "ANIWORLD_DISK_WARN_GB"
 _ENV_DISK_WARN_PERCENT = "ANIWORLD_DISK_WARN_PERCENT"
 _ENV_LIBRARY_AUTO_REPAIR = "ANIWORLD_LIBRARY_AUTO_REPAIR"
 _ENV_EXPERIMENTAL_SELF_HEAL = "ANIWORLD_EXPERIMENTAL_SELF_HEAL"
+_ENV_SAFE_MODE = "ANIWORLD_SAFE_MODE"
 
 
 def _experimental_flags():
@@ -149,9 +154,19 @@ def _set_bool_env(name, enabled):
     os.environ[name] = "1" if enabled else "0"
 
 
-def _resolved_download_path_value():
-    from pathlib import Path
+def _global_pref(key, default=None):
+    return get_user_preference("", key, default)
 
+
+def _set_global_pref(key, value):
+    set_user_preference("", key, value)
+
+
+def _safe_mode_enabled():
+    return os.environ.get(_ENV_SAFE_MODE, "0") == "1"
+
+
+def _resolved_download_path_value():
     raw = os.environ.get(_ENV_DOWNLOAD_PATH, "")
     if raw:
         path = Path(raw).expanduser()
@@ -772,6 +787,7 @@ def _settings_payload(
         "experimental_self_heal": _normalize_pref_bool(
             os.environ.get(_ENV_EXPERIMENTAL_SELF_HEAL, "0")
         ),
+        "safe_mode": _normalize_pref_bool(os.environ.get(_ENV_SAFE_MODE, "0")),
         "ui_preset": _normalize_ui_preset(ui_preset),
         "ui_mode": _normalize_ui_mode(ui_mode),
         "ui_scale": _normalize_ui_scale(ui_scale),
@@ -810,8 +826,112 @@ def _settings_payload(
         "browser_notify_library": _normalize_pref_bool(browser_notify_library),
         "browser_notify_settings": _normalize_pref_bool(browser_notify_settings),
         "browser_notify_system": _normalize_pref_bool(browser_notify_system),
+        "external_notifications_enabled": _normalize_pref_bool(
+            _global_pref("external_notifications_enabled", "0")
+        ),
+        "external_notification_type": (
+            _global_pref("external_notification_type", "generic") or "generic"
+        ),
+        "external_notification_url": _global_pref("external_notification_url", ""),
+        "external_notify_queue": _normalize_pref_bool(
+            _global_pref("external_notify_queue", "1")
+        ),
+        "external_notify_autosync": _normalize_pref_bool(
+            _global_pref("external_notify_autosync", "1")
+        ),
+        "external_notify_library": _normalize_pref_bool(
+            _global_pref("external_notify_library", "1")
+        ),
+        "external_notify_system": _normalize_pref_bool(
+            _global_pref("external_notify_system", "1")
+        ),
         "disk_guard": _disk_guard_snapshot(),
     }
+
+
+def _external_notification_type():
+    value = str(_global_pref("external_notification_type", "generic") or "generic")
+    return value if value in {"generic", "discord", "gotify", "ntfy"} else "generic"
+
+
+def _external_notifications_enabled():
+    return (
+        not _safe_mode_enabled()
+        and _normalize_pref_bool(_global_pref("external_notifications_enabled", "0"))
+        == "1"
+    )
+
+
+def _external_notifications_url():
+    return str(_global_pref("external_notification_url", "") or "").strip()
+
+
+def _external_notification_allowed(category):
+    normalized = str(category or "system").strip().lower()
+    if normalized not in {"queue", "autosync", "library", "system"}:
+        normalized = "system"
+    return (
+        _external_notifications_enabled()
+        and _normalize_pref_bool(_global_pref(f"external_notify_{normalized}", "1"))
+        == "1"
+        and bool(_external_notifications_url())
+    )
+
+
+def _post_external_notification(title, message, category="system", details=None):
+    if not _external_notification_allowed(category):
+        return False
+
+    url = _external_notifications_url()
+    notification_type = _external_notification_type()
+    clean_title = str(title or "AniWorld Downloader").strip()[:160]
+    clean_message = str(message or "").strip()[:1500]
+    payload = {
+        "app": "AniWorld Downloader",
+        "title": clean_title,
+        "message": clean_message,
+        "category": category,
+        "details": details or {},
+        "timestamp": int(time.time()),
+    }
+
+    try:
+        if notification_type == "discord":
+            body = json.dumps(
+                {"content": f"**{clean_title}**\n{clean_message}"}
+            ).encode("utf-8")
+            headers = {"Content-Type": "application/json"}
+        elif notification_type == "gotify":
+            body = json.dumps(
+                {"title": clean_title, "message": clean_message, "priority": 5}
+            ).encode("utf-8")
+            headers = {"Content-Type": "application/json"}
+        elif notification_type == "ntfy":
+            body = clean_message.encode("utf-8")
+            headers = {
+                "Title": clean_title,
+                "Tags": "tv,satellite",
+                "Priority": "default",
+            }
+        else:
+            body = json.dumps(payload).encode("utf-8")
+            headers = {"Content-Type": "application/json"}
+
+        request_obj = Request(url, data=body, headers=headers, method="POST")
+        with urlopen(request_obj, timeout=6) as response:
+            return 200 <= int(getattr(response, "status", 200)) < 300
+    except Exception as exc:
+        logger.warning("External notification failed: %s", exc)
+        return False
+
+
+def _dispatch_external_notification(title, message, category="system", details=None):
+    threading.Thread(
+        target=_post_external_notification,
+        args=(title, message, category, details or {}),
+        daemon=True,
+        name="aniworld-external-notify",
+    ).start()
 
 
 def _get_working_providers():
@@ -1083,6 +1203,7 @@ def _scan_library_snapshot(include_meta=True):
                     "folder": folder.name,
                     "seasons": {},
                     "total_size": 0,
+                    "files": [],
                 },
             )
             for file_path in folder.rglob("*"):
@@ -1097,9 +1218,14 @@ def _scan_library_snapshot(include_meta=True):
                 if not is_video:
                     continue
                 try:
-                    file_size = file_path.stat().st_size
+                    stat_info = file_path.stat()
+                    file_size = stat_info.st_size
+                    modified_at = time.strftime(
+                        "%Y-%m-%d %H:%M:%S", time.gmtime(stat_info.st_mtime)
+                    )
                 except OSError:
                     file_size = 0
+                    modified_at = None
 
                 season_key = str(season_num)
                 entry["seasons"].setdefault(season_key, [])
@@ -1113,9 +1239,23 @@ def _scan_library_snapshot(include_meta=True):
                             "file": file_path.name,
                             "size": file_size,
                             "is_video": True,
+                            "path": str(file_path),
+                            "modified_at": modified_at,
                         }
                     )
                     entry["total_size"] += file_size
+                entry["files"].append(
+                    {
+                        "season": season_num,
+                        "episode": episode_num,
+                        "file": file_path.name,
+                        "path": str(file_path),
+                        "relative_path": str(file_path.relative_to(folder)),
+                        "size": file_size,
+                        "ext": file_path.suffix.lower(),
+                        "modified_at": modified_at,
+                    }
+                )
 
             if lang_name:
                 language_totals.setdefault(lang_name, {"episodes": 0, "total_size": 0})
@@ -1131,6 +1271,18 @@ def _scan_library_snapshot(include_meta=True):
             )
             for season_key in entry["seasons"]:
                 entry["seasons"][season_key].sort(key=lambda item: item["episode"])
+            entry["files"].sort(
+                key=lambda item: (
+                    item.get("season", 0),
+                    item.get("episode", 0),
+                    item.get("file", "").lower(),
+                )
+            )
+            entry["file_count"] = len(entry["files"])
+            entry["largest_files"] = sorted(
+                entry["files"],
+                key=lambda item: (-int(item.get("size") or 0), item.get("file", "").lower()),
+            )[:8]
             entry["total_episodes"] = total_eps
             if lang_name:
                 language_totals[lang_name]["episodes"] += total_eps
@@ -1265,7 +1417,9 @@ _runtime_cache_warmer_lock = threading.Lock()
 
 
 def _self_heal_enabled():
-    return os.environ.get(_ENV_EXPERIMENTAL_SELF_HEAL, "0") == "1"
+    return (not _safe_mode_enabled()) and (
+        os.environ.get(_ENV_EXPERIMENTAL_SELF_HEAL, "0") == "1"
+    )
 
 
 def _record_self_heal_action(queue_id, reason):
@@ -1345,6 +1499,16 @@ def _attempt_self_heal_requeue(queue_item, reason, ffmpeg_state):
             "reason": reason,
             "attempts": _peek_queue_recovery(queue_id).get("attempts", 0),
             "ffmpeg_pid": ffmpeg_state.get("pid"),
+        },
+    )
+    _dispatch_external_notification(
+        "Download self-healed",
+        f"{queue_item.get('title') or 'Download'} was requeued after a stuck ffmpeg process was detected.",
+        category="system",
+        details={
+            "queue_id": queue_id,
+            "title": queue_item.get("title"),
+            "reason": reason,
         },
     )
     _emit_ui_event("queue", "dashboard", "nav", min_interval=0.2)
@@ -1530,12 +1694,33 @@ def _build_diagnostics_payload():
             "library_auto_repair": os.environ.get(_ENV_LIBRARY_AUTO_REPAIR, "0")
             == "1",
             "experimental_self_heal": _self_heal_enabled(),
+            "safe_mode": _safe_mode_enabled(),
         },
         "self_heal": _safe(
             _self_heal_snapshot,
             {"enabled": False, "last_action_at": None, "last_reason": "", "last_queue_id": None, "ffmpeg": {}},
             "self_heal",
         ),
+        "provider_failures": _safe(
+            get_provider_failure_analytics,
+            [],
+            "provider_failures",
+        )[:6],
+    }
+
+
+def _build_maintenance_payload():
+    diagnostics = _build_diagnostics_payload()
+    return {
+        "diagnostics": diagnostics,
+        "sessions": get_download_session_history(80),
+        "provider_failures": get_provider_failure_analytics(),
+        "safe_mode": _safe_mode_enabled(),
+        "webhooks": {
+            "enabled": _external_notifications_enabled(),
+            "type": _external_notification_type(),
+            "url_configured": bool(_external_notifications_url()),
+        },
     }
 
 
@@ -2299,6 +2484,11 @@ def _queue_missing_episode_labels(
 
 
 def _run_library_auto_repair(language, preferred_provider, username=None):
+    if _safe_mode_enabled():
+        return {
+            "created": [],
+            "skipped": [{"series_url": "", "reason": "Safe mode is enabled"}],
+        }
     compare_payload = _get_cached_library_compare(refresh=True)
     snapshot = _get_cached_library_snapshot(include_meta=True)
     titles_by_url = {}
@@ -2341,6 +2531,88 @@ def _run_library_auto_repair(language, preferred_provider, username=None):
         except Exception as exc:
             skipped.append({"series_url": series_url, "reason": str(exc)})
     return {"created": created, "skipped": skipped}
+
+
+def _allowed_library_roots():
+    roots = []
+    for _, _, root in _get_scan_targets():
+        try:
+            roots.append(root.resolve())
+        except Exception:
+            continue
+    return roots
+
+
+def _is_path_within_roots(path_string):
+    try:
+        path = Path(path_string).resolve()
+    except Exception:
+        return False
+    for root in _allowed_library_roots():
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _resolve_duplicate_file_paths(file_paths):
+    groups = {}
+    for item in file_paths or []:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        if not path or not _is_path_within_roots(path):
+            continue
+        key = (int(item.get("season") or 0), int(item.get("episode") or 0))
+        groups.setdefault(key, []).append(item)
+
+    keep_paths = []
+    delete_paths = []
+    for entries in groups.values():
+        if len(entries) < 2:
+            continue
+        ordered = sorted(
+            entries,
+            key=lambda entry: (
+                -int(entry.get("size") or 0),
+                str(entry.get("path") or "").lower(),
+            ),
+        )
+        keep_paths.append(str(ordered[0].get("path") or ""))
+        delete_paths.extend(
+            str(entry.get("path") or "") for entry in ordered[1:] if entry.get("path")
+        )
+    return {
+        "keep_paths": [path for path in keep_paths if path],
+        "delete_paths": [path for path in delete_paths if path],
+    }
+
+
+def _run_provider_test(episode_url, language, provider):
+    prov = resolve_provider(episode_url)
+    if not prov.episode_cls:
+        raise ValueError("This source does not expose episode testing")
+
+    episode = prov.episode_cls(url=episode_url)
+    episode.selected_language = language
+    episode.selected_provider = provider
+
+    provider_url = episode.provider_url
+    stream_url = episode.stream_url
+
+    return {
+        "site": _detect_site(episode_url),
+        "episode_url": episode_url,
+        "provider_url": provider_url,
+        "provider_host": urlparse(provider_url).netloc if provider_url else "",
+        "stream_url": stream_url,
+        "stream_host": urlparse(stream_url).netloc if stream_url else "",
+        "language": language,
+        "provider": provider,
+        "ok": True,
+    }
 
 
 def _get_cached_stats_payload(username=None):
@@ -2513,6 +2785,22 @@ def _queue_worker():
                         "errors": errors[:4],
                     },
                 )
+                _dispatch_external_notification(
+                    "Download completed" if status == "completed" else "Download failed",
+                    (
+                        f"{item.get('title') or 'Download'} finished successfully."
+                        if status == "completed"
+                        else f"{item.get('title') or 'Download'} failed after {len(errors)} error(s)."
+                    ),
+                    category="queue",
+                    details={
+                        "queue_id": item["id"],
+                        "title": item.get("title"),
+                        "status": status,
+                        "provider": item.get("provider"),
+                        "language": item.get("language"),
+                    },
+                )
                 _emit_ui_event("queue", "dashboard", "library", "nav")
 
         except Exception as e:
@@ -2664,6 +2952,12 @@ def _run_autosync_for_job(job):
 
         total_new_queued = 0
         total_episodes_found = 0
+        diff_preview = []
+        queued_preview = []
+        skipped_preview = []
+
+        def _episode_label(season_number, episode_number):
+            return f"S{int(season_number):02d}E{int(episode_number):03d}"
 
         for target_lang in target_languages:
             job_lang_folder = lang_folder_map.get(
@@ -2716,6 +3010,7 @@ def _run_autosync_for_job(job):
 
             # Collect all episode URLs that are NOT yet downloaded
             missing_episodes = []
+            missing_labels = []
             lang_total_found = 0
             for season in series.seasons:
                 season_obj = prov.season_cls(url=season.url, series=series)
@@ -2726,6 +3021,12 @@ def _run_autosync_for_job(job):
                     key = (ep.season.season_number, ep.episode_number)
                     if key not in downloaded_eps:
                         missing_episodes.append(ep.url)
+                        missing_labels.append(
+                            _episode_label(
+                                ep.season.season_number,
+                                ep.episode_number,
+                            )
+                        )
 
             # In "All Languages" mode we want to make sure the specific language is actually
             # available on this episode before downloading? For VOE/Vidoza, it downloads what is chosen.
@@ -2743,12 +3044,29 @@ def _run_autosync_for_job(job):
                     missing_episodes,
                 )
                 queueable_episodes = conflict_guard["episodes"]
+                queued_labels = missing_labels[: len(queueable_episodes)]
+                skipped_labels = missing_labels[len(queueable_episodes) :]
+                diff_preview.append(
+                    {
+                        "language": target_lang,
+                        "episodes_found": lang_total_found,
+                        "missing_count": len(missing_labels),
+                        "missing_sample": missing_labels[:12],
+                    }
+                )
                 if not queueable_episodes:
                     logger.info(
                         "Auto-sync skipped '%s' (%s) - all %d episode(s) already queued/running",
                         job["title"],
                         target_lang,
                         len(missing_episodes),
+                    )
+                    skipped_preview.append(
+                        {
+                            "language": target_lang,
+                            "reason": "already queued or running",
+                            "labels": missing_labels[:12],
+                        }
                     )
                     continue
 
@@ -2758,6 +3076,13 @@ def _run_autosync_for_job(job):
                         conflict_guard["skipped"],
                         job["title"],
                         target_lang,
+                    )
+                    skipped_preview.append(
+                        {
+                            "language": target_lang,
+                            "reason": "queue conflict",
+                            "labels": skipped_labels[:12],
+                        }
                     )
 
                 total_new_queued += len(queueable_episodes)
@@ -2779,12 +3104,23 @@ def _run_autosync_for_job(job):
                     job["title"],
                     target_lang,
                 )
+                queued_preview.append(
+                    {
+                        "language": target_lang,
+                        "labels": queued_labels[:12],
+                        "queued_count": len(queueable_episodes),
+                    }
+                )
                 _emit_ui_event("autosync", "queue", "dashboard", "nav")
 
         now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         update_fields = {
             "last_check": now_str,
             "episodes_found": total_episodes_found,
+            "last_diff_json": json.dumps(diff_preview[-8:]),
+            "last_queued_json": json.dumps(queued_preview[-8:]),
+            "last_skipped_json": json.dumps(skipped_preview[-8:]),
+            "last_error": "",
         }
 
         if total_new_queued > 0:
@@ -2793,6 +3129,17 @@ def _run_autosync_for_job(job):
         update_autosync_job(job["id"], **update_fields)
         if job.get("series_url"):
             touch_series_last_synced(job.get("series_url"))
+        if total_new_queued > 0:
+            _dispatch_external_notification(
+                "Auto-Sync found new episodes",
+                f"{job.get('title') or 'Series'} queued {total_new_queued} new episode(s).",
+                category="autosync",
+                details={
+                    "job_id": job["id"],
+                    "title": job.get("title"),
+                    "queued_count": total_new_queued,
+                },
+            )
         _emit_ui_event("autosync", "dashboard", "nav", "settings")
     except Exception as e:
         logger.error("Auto-sync failed for '%s': %s", job.get("title", "?"), e)
@@ -2801,6 +3148,13 @@ def _run_autosync_for_job(job):
         update_autosync_job(
             job["id"],
             last_check=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            last_error=str(e),
+        )
+        _dispatch_external_notification(
+            "Auto-Sync failed",
+            f"{job.get('title') or 'Series'} could not be checked: {e}",
+            category="autosync",
+            details={"job_id": job["id"], "title": job.get("title")},
         )
         _emit_ui_event("autosync", "settings")
     finally:
@@ -3753,6 +4107,10 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
     def diagnostics_page():
         return render_template("diagnostics.html")
 
+    @app.route("/maintenance")
+    def maintenance_page():
+        return render_template("maintenance.html")
+
     @app.route("/audit")
     def audit_page():
         return render_template("audit.html")
@@ -3969,6 +4327,8 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             _set_bool_env(_ENV_LIBRARY_AUTO_REPAIR, data["library_auto_repair"])
         if "experimental_self_heal" in data:
             _set_bool_env(_ENV_EXPERIMENTAL_SELF_HEAL, data["experimental_self_heal"])
+        if "safe_mode" in data:
+            _set_bool_env(_ENV_SAFE_MODE, data["safe_mode"])
         if "lang_separation" in data:
             _set_bool_env(_ENV_LANG_SEPARATION, data["lang_separation"])
         if "disable_english_sub" in data:
@@ -4123,6 +4483,31 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 "browser_notify_system",
                 _normalize_pref_bool(data["browser_notify_system"]),
             )
+        current_user, is_admin = _get_current_user_info()
+        if is_admin:
+            if "external_notifications_enabled" in data:
+                _set_global_pref(
+                    "external_notifications_enabled",
+                    _normalize_pref_bool(data["external_notifications_enabled"]),
+                )
+            if "external_notification_type" in data:
+                notification_type = str(data["external_notification_type"] or "").strip().lower()
+                if notification_type not in {"generic", "discord", "gotify", "ntfy"}:
+                    return jsonify({"error": "Invalid external_notification_type"}), 400
+                _set_global_pref("external_notification_type", notification_type)
+            if "external_notification_url" in data:
+                _set_global_pref(
+                    "external_notification_url",
+                    str(data["external_notification_url"] or "").strip(),
+                )
+            for key in (
+                "external_notify_queue",
+                "external_notify_autosync",
+                "external_notify_library",
+                "external_notify_system",
+            ):
+                if key in data:
+                    _set_global_pref(key, _normalize_pref_bool(data[key]))
         _record_user_event(
             "settings.updated",
             subject_type="settings",
@@ -4138,6 +4523,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                     "disk_warn_gb",
                     "disk_warn_percent",
                     "library_auto_repair",
+                    "safe_mode",
                     "lang_separation",
                     "disable_english_sub",
                     "experimental_filmpalast",
@@ -4168,6 +4554,13 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                     "browser_notify_library",
                     "browser_notify_settings",
                     "browser_notify_system",
+                    "external_notifications_enabled",
+                    "external_notification_type",
+                    "external_notification_url",
+                    "external_notify_queue",
+                    "external_notify_autosync",
+                    "external_notify_library",
+                    "external_notify_system",
                 }
             },
         )
@@ -4614,9 +5007,63 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
             hours = 168
         return jsonify({"items": get_provider_score_history(hours=hours), "hours": hours})
 
+    @app.route("/api/provider-health/failures")
+    def api_provider_health_failures():
+        return jsonify({"items": get_provider_failure_analytics()})
+
     @app.route("/api/diagnostics")
     def api_diagnostics():
         return jsonify(_build_diagnostics_payload())
+
+    @app.route("/api/maintenance")
+    def api_maintenance():
+        return jsonify(_build_maintenance_payload())
+
+    @app.route("/api/maintenance/warm-cache", methods=["POST"])
+    def api_maintenance_warm_cache():
+        _warm_runtime_caches_once()
+        _record_user_event(
+            "maintenance.warm_cache",
+            subject_type="maintenance",
+            subject="runtime-cache",
+        )
+        _emit_ui_event("library", "dashboard", "settings")
+        return jsonify({"ok": True})
+
+    @app.route("/api/maintenance/provider-snapshot", methods=["POST"])
+    def api_maintenance_provider_snapshot():
+        items = get_provider_health()
+        created = snapshot_provider_score_history(items, minimum_interval_minutes=0)
+        _record_user_event(
+            "maintenance.provider_snapshot",
+            subject_type="maintenance",
+            subject="provider-score-history",
+            details={"snapshots": created},
+        )
+        _emit_ui_event("dashboard", "settings")
+        return jsonify({"ok": True, "snapshots": created})
+
+    @app.route("/api/sessions")
+    def api_sessions():
+        try:
+            limit = max(1, min(int(request.args.get("limit", "80")), 200))
+        except ValueError:
+            limit = 80
+        return jsonify({"items": get_download_session_history(limit)})
+
+    @app.route("/api/provider-test", methods=["POST"])
+    def api_provider_test():
+        data = request.get_json(silent=True) or {}
+        episode_url = str(data.get("episode_url") or "").strip()
+        language = str(data.get("language") or "").strip() or "German Dub"
+        provider = str(data.get("provider") or "").strip() or "VOE"
+        if not episode_url:
+            return jsonify({"error": "episode_url is required"}), 400
+        try:
+            payload = _run_provider_test(episode_url, language, provider)
+            return jsonify(payload)
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 400
 
     @app.route("/api/backup/export")
     def api_backup_export():
@@ -4695,6 +5142,7 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 _ENV_EXPERIMENTAL_SELF_HEAL,
                 settings_payload.get("experimental_self_heal", "0"),
             )
+            _set_bool_env(_ENV_SAFE_MODE, settings_payload.get("safe_mode", "0"))
         counts = import_app_state(payload.get("tables") or payload)
         _record_user_event(
             "backup.imported",
@@ -4904,6 +5352,16 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 "skipped_conflicts": result["skipped_conflicts"],
             },
         )
+        _dispatch_external_notification(
+            "Missing episodes queued",
+            f"{title} queued {result['queued_episodes']} missing episode(s) from the library compare view.",
+            category="library",
+            details={
+                "title": title,
+                "series_url": series_url,
+                "queued_episodes": result["queued_episodes"],
+            },
+        )
         _emit_ui_event("queue", "dashboard", "library", "nav")
         return jsonify(result)
 
@@ -4933,8 +5391,56 @@ def create_app(auth_enabled=False, sso_enabled=False, force_sso=False):
                 "provider": preferred_provider,
             },
         )
+        if repair_result["created"]:
+            _dispatch_external_notification(
+                "Library auto-repair queued episodes",
+                f"Library repair queued missing episodes for {len(repair_result['created'])} title(s).",
+                category="library",
+                details={"queued_titles": len(repair_result["created"])},
+            )
         _emit_ui_event("queue", "dashboard", "library", "nav")
         return jsonify({"ok": True, **repair_result})
+
+    @app.route("/api/library/resolve-duplicates", methods=["POST"])
+    def api_library_resolve_duplicates():
+        data = request.get_json(silent=True) or {}
+        title = str(data.get("title") or "").strip() or "Library Title"
+        duplicate_files = data.get("duplicate_files") or []
+        if not isinstance(duplicate_files, list) or not duplicate_files:
+            return jsonify({"error": "duplicate_files are required"}), 400
+
+        resolved = _resolve_duplicate_file_paths(duplicate_files)
+        deleted = []
+        failed = []
+        for path_string in resolved["delete_paths"]:
+            try:
+                path = Path(path_string)
+                if not path.exists():
+                    continue
+                path.unlink()
+                deleted.append(path_string)
+            except Exception as exc:
+                failed.append({"path": path_string, "error": str(exc)})
+
+        _record_user_event(
+            "library.duplicates_resolved",
+            subject_type="library",
+            subject=title,
+            details={
+                "deleted": len(deleted),
+                "failed": len(failed),
+                "kept": len(resolved["keep_paths"]),
+            },
+        )
+        _emit_ui_event("library", "dashboard", "nav")
+        return jsonify(
+            {
+                "ok": True,
+                "deleted": deleted,
+                "failed": failed,
+                "kept": resolved["keep_paths"],
+            }
+        )
 
     @app.route("/api/library/delete", methods=["POST"])
     def api_library_delete():

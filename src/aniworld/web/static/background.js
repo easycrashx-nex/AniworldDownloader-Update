@@ -217,6 +217,11 @@
   let deviceScale = 1;
   let pointerX = null;
   let pointerY = null;
+  let magnetActive = false;
+  const pressureWaves = [];
+  const meteors = [];
+  let lastFrameTime = performance.now();
+  let lastMeteorAt = 0;
 
   function getBackgroundMode() {
     const mode = document.body?.dataset?.uiBackground || "dynamic";
@@ -255,7 +260,98 @@
       y: Math.random() * height,
       vx: (Math.random() - 0.5) * speedFactor,
       vy: (Math.random() - 0.5) * speedFactor,
+      driftOffset: Math.random() * Math.PI * 2,
+      driftScale: 0.7 + Math.random() * 0.8,
     };
+  }
+
+  function ambientDriftConfig() {
+    const mode = getBackgroundMode();
+    if (mode === "storm") return { strength: 0.12, speed: 0.0018 };
+    if (mode === "nebula") return { strength: 0.085, speed: 0.0011 };
+    if (mode === "aurora") return { strength: 0.076, speed: 0.00125 };
+    if (mode === "pulse") return { strength: 0.094, speed: 0.0016 };
+    if (mode === "drift") return { strength: 0.052, speed: 0.0009 };
+    if (mode === "minimal" || mode === "frost") {
+      return { strength: 0.018, speed: 0.00055 };
+    }
+    return { strength: 0.04, speed: 0.00085 };
+  }
+
+  function meteorConfig() {
+    const mode = getBackgroundMode();
+    if (mode === "storm") return { interval: 2600, chance: 0.9 };
+    if (mode === "pulse" || mode === "cinematic") return { interval: 3400, chance: 0.82 };
+    if (mode === "minimal" || mode === "off") return { interval: 999999, chance: 0 };
+    if (mode === "frost") return { interval: 5200, chance: 0.45 };
+    return { interval: 4300, chance: 0.68 };
+  }
+
+  function spawnMeteor() {
+    const profile = getBackgroundProfile();
+    const fromLeft = Math.random() > 0.5;
+    const startX = fromLeft ? -60 : width + 60;
+    const startY = Math.random() * Math.max(120, height * 0.45);
+    const directionX = fromLeft ? 1 : -1;
+    meteors.push({
+      x: startX,
+      y: startY,
+      vx: directionX * (4.2 + Math.random() * 1.8),
+      vy: 1.1 + Math.random() * 1.4,
+      length: 70 + Math.random() * 70,
+      life: 0,
+      maxLife: 36 + Math.floor(Math.random() * 22),
+      alpha: Math.min(0.9, profile.edgeAlpha + 0.24),
+    });
+  }
+
+  function isFreeBackgroundTarget(target) {
+    if (!target) return false;
+    const blocked = target.closest(
+      [
+        ".top-bar",
+        ".dashboard-panel",
+        ".settings-section",
+        ".settings-info-card",
+        ".page-header",
+        ".section-heading",
+        ".nav-dropdown",
+        ".nav-menu",
+        ".modal-overlay",
+        ".modal-card",
+        ".queue-modal",
+        ".series-modal",
+        ".library-title-section",
+        ".library-location-header",
+        ".library-season-header",
+        ".autosync-card",
+        ".provider-health-card",
+        ".provider-history-card",
+        ".maintenance-session-card",
+        ".auth-card",
+        ".login-shell",
+        "button",
+        "input",
+        "select",
+        "textarea",
+        "a",
+        "label",
+        "table",
+      ].join(","),
+    );
+    return !blocked;
+  }
+
+  function pushPressureWave(x, y) {
+    pressureWaves.push({
+      x,
+      y,
+      radius: 0,
+      strength: 7.4,
+      maxRadius: Math.min(Math.max(width, height) * 0.38, 340),
+      life: 0,
+      maxLife: 42,
+    });
   }
 
   function resizeCanvas() {
@@ -275,14 +371,60 @@
     drawFrame();
   }
 
-  function updatePoints() {
+  function updatePoints(deltaMs) {
     const profile = getBackgroundProfile();
     if (prefersReducedMotion || getBackgroundMode() === "off") return;
     const speedMultiplier = getMotionSpeedMultiplier();
+    const drift = ambientDriftConfig();
+    const now = performance.now();
+
+    for (let index = pressureWaves.length - 1; index >= 0; index -= 1) {
+      const wave = pressureWaves[index];
+      wave.life += 1;
+      wave.radius = (wave.life / wave.maxLife) * wave.maxRadius;
+      if (wave.life >= wave.maxLife) {
+        pressureWaves.splice(index, 1);
+      }
+    }
+
+    const meteorRules = meteorConfig();
+    if (
+      meteorRules.chance > 0 &&
+      now - lastMeteorAt >= meteorRules.interval &&
+      Math.random() < meteorRules.chance
+    ) {
+      spawnMeteor();
+      lastMeteorAt = now;
+    }
+
+    for (let index = meteors.length - 1; index >= 0; index -= 1) {
+      const meteor = meteors[index];
+      meteor.life += 1;
+      meteor.x += meteor.vx * speedMultiplier;
+      meteor.y += meteor.vy * speedMultiplier;
+      if (
+        meteor.life >= meteor.maxLife ||
+        meteor.x < -220 ||
+        meteor.x > width + 220 ||
+        meteor.y > height + 220
+      ) {
+        meteors.splice(index, 1);
+      }
+    }
 
     for (const point of points) {
       point.x += point.vx * speedMultiplier;
       point.y += point.vy * speedMultiplier;
+      point.x +=
+        Math.cos(now * drift.speed + point.driftOffset) *
+        drift.strength *
+        point.driftScale *
+        (deltaMs / 16.666);
+      point.y +=
+        Math.sin(now * drift.speed * 0.88 + point.driftOffset * 1.7) *
+        drift.strength *
+        point.driftScale *
+        (deltaMs / 16.666);
 
       if (point.x <= 0 || point.x >= width) point.vx *= -1;
       if (point.y <= 0 || point.y >= height) point.vy *= -1;
@@ -290,12 +432,42 @@
       point.x = Math.max(0, Math.min(width, point.x));
       point.y = Math.max(0, Math.min(height, point.y));
 
+      for (const wave of pressureWaves) {
+        const wx = point.x - wave.x;
+        const wy = point.y - wave.y;
+        const waveDistance = Math.hypot(wx, wy);
+        if (!waveDistance) continue;
+        const band = 64;
+        const edgeDistance = Math.abs(waveDistance - wave.radius);
+        if (edgeDistance > band) continue;
+        const pulseForce =
+          ((band - edgeDistance) / band) *
+          wave.strength *
+          (1 - wave.life / wave.maxLife) *
+          speedMultiplier;
+        point.x += (wx / waveDistance) * pulseForce;
+        point.y += (wy / waveDistance) * pulseForce;
+      }
+
       if (pointerX === null || pointerY === null) continue;
 
       const dx = point.x - pointerX;
       const dy = point.y - pointerY;
       const distSq = dx * dx + dy * dy;
-      if (distSq > 0 && distSq < 110 * 110) {
+
+      if (magnetActive) {
+        const magnetRadius = 190;
+        if (distSq > 0 && distSq < magnetRadius * magnetRadius) {
+          const distance = Math.sqrt(distSq);
+          const pullForce =
+            ((magnetRadius * magnetRadius - distSq) /
+              (magnetRadius * magnetRadius)) *
+            1.15 *
+            speedMultiplier;
+          point.x -= (dx / distance) * pullForce;
+          point.y -= (dy / distance) * pullForce;
+        }
+      } else if (distSq > 0 && distSq < 110 * 110) {
         const force = (110 * 110 - distSq) / (110 * 110);
         const distance = Math.sqrt(distSq);
         point.x += (dx / distance) * force * 0.8 * speedMultiplier;
@@ -329,6 +501,7 @@
   function drawFrame() {
     const mode = getBackgroundMode();
     const profile = getBackgroundProfile();
+    const now = performance.now();
     canvas.style.opacity = String(profile.canvasOpacity);
     ctx.clearRect(0, 0, width, height);
     if (mode === "off") return;
@@ -352,12 +525,18 @@
         const alpha =
           Math.max(0.04, 1 - neighbor.distance / profile.maxDistance) *
           profile.edgeAlpha;
+        const breathing =
+          0.84 +
+          0.22 *
+            Math.sin(
+              now * 0.0024 + index * 0.37 + neighbor.index * 0.21,
+            );
 
         ctx.beginPath();
         ctx.moveTo(point.x, point.y);
         ctx.lineTo(target.x, target.y);
-        ctx.strokeStyle = `rgba(${profile.edgeColor}, ${alpha})`;
-        ctx.lineWidth = mode === "storm" ? 1.15 : 1;
+        ctx.strokeStyle = `rgba(${profile.edgeColor}, ${Math.max(0.025, alpha * breathing)})`;
+        ctx.lineWidth = (mode === "storm" ? 1.15 : 1) * (0.92 + breathing * 0.1);
         ctx.stroke();
       }
     }
@@ -379,10 +558,43 @@
       ctx.fillStyle = highlight ? profile.highlightColor : profile.pointColor;
       ctx.fill();
     }
+
+    for (const meteor of meteors) {
+      const fade = Math.max(0, 1 - meteor.life / meteor.maxLife);
+      const tailX = meteor.x - meteor.vx * (meteor.length / 8);
+      const tailY = meteor.y - meteor.vy * (meteor.length / 8);
+      const gradient = ctx.createLinearGradient(meteor.x, meteor.y, tailX, tailY);
+      gradient.addColorStop(0, `rgba(${profile.edgeColor}, ${meteor.alpha * fade})`);
+      gradient.addColorStop(1, `rgba(${profile.edgeColor}, 0)`);
+      ctx.beginPath();
+      ctx.moveTo(meteor.x, meteor.y);
+      ctx.lineTo(tailX, tailY);
+      ctx.strokeStyle = gradient;
+      ctx.lineWidth = 2.1;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(meteor.x, meteor.y, 1.8, 0, Math.PI * 2);
+      ctx.fillStyle = profile.highlightColor;
+      ctx.fill();
+    }
+
+    for (const wave of pressureWaves) {
+      const alpha = Math.max(0, 0.16 * (1 - wave.life / wave.maxLife));
+      if (alpha <= 0) continue;
+      ctx.beginPath();
+      ctx.arc(wave.x, wave.y, wave.radius, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(${profile.edgeColor}, ${alpha})`;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
   }
 
   function tick() {
-    updatePoints();
+    const now = performance.now();
+    const deltaMs = Math.min(34, Math.max(8, now - lastFrameTime));
+    lastFrameTime = now;
+    updatePoints(deltaMs);
     drawFrame();
     if (!prefersReducedMotion && getBackgroundMode() !== "off") {
       animationFrame = window.requestAnimationFrame(tick);
@@ -393,6 +605,9 @@
 
   function refreshBackgroundMode() {
     resizeCanvas();
+    meteors.length = 0;
+    pressureWaves.length = 0;
+    lastFrameTime = performance.now();
     if (animationFrame) {
       window.cancelAnimationFrame(animationFrame);
       animationFrame = null;
@@ -418,8 +633,42 @@
     () => {
       pointerX = null;
       pointerY = null;
+      magnetActive = false;
     },
     { passive: true },
+  );
+  window.addEventListener(
+    "mousedown",
+    (event) => {
+      pointerX = event.clientX;
+      pointerY = event.clientY;
+      if (!isFreeBackgroundTarget(event.target)) return;
+      if (event.button === 0) {
+        pushPressureWave(event.clientX, event.clientY);
+      } else if (event.button === 2) {
+        magnetActive = true;
+        event.preventDefault();
+      }
+    },
+    false,
+  );
+  window.addEventListener(
+    "mouseup",
+    (event) => {
+      if (event.button === 2) {
+        magnetActive = false;
+      }
+    },
+    { passive: true },
+  );
+  window.addEventListener(
+    "contextmenu",
+    (event) => {
+      if (magnetActive && isFreeBackgroundTarget(event.target)) {
+        event.preventDefault();
+      }
+    },
+    false,
   );
   document.addEventListener(
     "visibilitychange",
@@ -443,6 +692,19 @@
   document.addEventListener("aniworld:ui-motion", refreshBackgroundMode, {
     passive: true,
   });
+  document.addEventListener(
+    "aniworld:notification",
+    (event) => {
+      const detail = event.detail || {};
+      const baseY = Math.min(height * 0.32, 220);
+      const baseX = width * (0.3 + Math.random() * 0.4);
+      pushPressureWave(baseX, baseY);
+      if (detail.level === "error" || String(detail.source || "").includes("Queue")) {
+        pushPressureWave(width * (0.5 + (Math.random() - 0.5) * 0.12), baseY + 22);
+      }
+    },
+    { passive: true },
+  );
 
   resizeCanvas();
 

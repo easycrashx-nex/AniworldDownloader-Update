@@ -897,6 +897,10 @@ CREATE TABLE IF NOT EXISTS autosync_jobs (
     last_check TEXT,
     last_new_found TEXT,
     episodes_found INTEGER NOT NULL DEFAULT 0,
+    last_diff_json TEXT NOT NULL DEFAULT '{}',
+    last_queued_json TEXT NOT NULL DEFAULT '[]',
+    last_skipped_json TEXT NOT NULL DEFAULT '[]',
+    last_error TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
@@ -907,6 +911,25 @@ def init_autosync_db():
     conn = get_db()
     try:
         conn.execute(_CREATE_AUTOSYNC_TABLE)
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(autosync_jobs)")
+        }
+        if "last_diff_json" not in columns:
+            conn.execute(
+                "ALTER TABLE autosync_jobs ADD COLUMN last_diff_json TEXT NOT NULL DEFAULT '{}'"
+            )
+        if "last_queued_json" not in columns:
+            conn.execute(
+                "ALTER TABLE autosync_jobs ADD COLUMN last_queued_json TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "last_skipped_json" not in columns:
+            conn.execute(
+                "ALTER TABLE autosync_jobs ADD COLUMN last_skipped_json TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "last_error" not in columns:
+            conn.execute(
+                "ALTER TABLE autosync_jobs ADD COLUMN last_error TEXT NOT NULL DEFAULT ''"
+            )
         # Add UNIQUE index on series_url (migration for existing DBs)
         try:
             conn.execute(
@@ -999,6 +1022,10 @@ def update_autosync_job(job_id, **fields):
         "last_check",
         "last_new_found",
         "episodes_found",
+        "last_diff_json",
+        "last_queued_json",
+        "last_skipped_json",
+        "last_error",
     }
     filtered = {k: v for k, v in fields.items() if k in allowed}
     if not filtered:
@@ -1976,6 +2003,113 @@ def get_provider_score_history(hours=168):
             item = dict(row)
             grouped.setdefault(item["provider"], []).append(item)
         return grouped
+    finally:
+        conn.close()
+
+
+def get_provider_failure_analytics(limit_reasons=6):
+    limit_reasons = max(1, min(int(limit_reasons or 6), 12))
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT provider, title, completed_at, errors "
+            "FROM download_stats_archive "
+            "WHERE status = 'failed' "
+            "ORDER BY COALESCE(completed_at, created_at) DESC",
+        ).fetchall()
+
+        analytics = {}
+        for row in rows:
+            provider = row["provider"] or "Unknown"
+            item = analytics.setdefault(
+                provider,
+                {
+                    "provider": provider,
+                    "failed_total": 0,
+                    "latest_failure_at": None,
+                    "top_reasons": {},
+                    "latest_titles": [],
+                },
+            )
+            item["failed_total"] += 1
+            if not item["latest_failure_at"] and row["completed_at"]:
+                item["latest_failure_at"] = row["completed_at"]
+            title = row["title"] or "Unknown Title"
+            if title not in item["latest_titles"]:
+                item["latest_titles"].append(title)
+                item["latest_titles"] = item["latest_titles"][:5]
+
+            try:
+                errors = json.loads(row["errors"] or "[]")
+            except Exception:
+                errors = []
+            if not isinstance(errors, list):
+                errors = []
+
+            for entry in errors:
+                if not isinstance(entry, dict):
+                    continue
+                raw_message = (
+                    entry.get("error")
+                    or entry.get("message")
+                    or entry.get("type")
+                    or "Unknown failure"
+                )
+                reason = str(raw_message).strip().splitlines()[0][:140] or "Unknown failure"
+                item["top_reasons"][reason] = item["top_reasons"].get(reason, 0) + 1
+
+        ordered = []
+        for item in analytics.values():
+            top_reasons = sorted(
+                item["top_reasons"].items(),
+                key=lambda reason_item: (-reason_item[1], reason_item[0].lower()),
+            )[:limit_reasons]
+            ordered.append(
+                {
+                    "provider": item["provider"],
+                    "failed_total": item["failed_total"],
+                    "latest_failure_at": item["latest_failure_at"],
+                    "top_reasons": [
+                        {"reason": reason, "count": count}
+                        for reason, count in top_reasons
+                    ],
+                    "latest_titles": item["latest_titles"],
+                }
+            )
+
+        ordered.sort(
+            key=lambda item: (
+                -int(item["failed_total"] or 0),
+                -(len(item["top_reasons"])),
+                item["provider"].lower(),
+            )
+        )
+        return ordered
+    finally:
+        conn.close()
+
+
+def get_download_session_history(limit=80):
+    limit = max(1, min(int(limit or 80), 300))
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT queue_id AS id, title, series_url, language, provider, username, status, "
+            "source, total_episodes, created_at, completed_at, custom_path_id, errors, "
+            "ROUND((julianday(COALESCE(completed_at, created_at)) - julianday(created_at)) * 86400, 1) AS duration_seconds "
+            "FROM download_stats_archive "
+            "ORDER BY COALESCE(completed_at, created_at) DESC, queue_id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        sessions = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["errors"] = json.loads(item.get("errors") or "[]")
+            except Exception:
+                item["errors"] = []
+            sessions.append(item)
+        return sessions
     finally:
         conn.close()
 

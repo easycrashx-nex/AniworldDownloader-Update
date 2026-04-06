@@ -179,6 +179,19 @@
       is off by default and can put extra load on the server while a broken
       stream is being analyzed and recovered.
     </div>
+
+    <label class="settings-checkbox">
+      <input
+        type="checkbox"
+        id="safeMode"
+        onchange="saveSafeMode()"
+      />
+      Safe Mode
+    </label>
+    <div class="settings-hint">
+      Turns off the riskiest experimental recovery helpers and outbound webhook
+      notifications so the downloader stays in a conservative runtime mode.
+    </div>
   </div>
 
   <div class="settings-section">
@@ -268,6 +281,78 @@
         />
         System & general notifications
       </label>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h2>External Notifications</h2>
+    <label class="settings-checkbox">
+      <input
+        type="checkbox"
+        id="externalNotificationsEnabled"
+        onchange="saveExternalNotificationSettings()"
+      />
+      Enable webhooks / external notifications
+    </label>
+
+    <div class="settings-row" style="gap: 10px; flex-wrap: wrap">
+      <div class="settings-field">
+        <label class="field-label">Type</label>
+        <select id="externalNotificationType" onchange="saveExternalNotificationSettings()" class="sync-select">
+          <option value="generic">Generic webhook</option>
+          <option value="discord">Discord webhook</option>
+          <option value="gotify">Gotify</option>
+          <option value="ntfy">ntfy</option>
+        </select>
+      </div>
+      <div class="settings-field settings-field-wide">
+        <label class="field-label">Webhook URL</label>
+        <input
+          type="text"
+          id="externalNotificationUrl"
+          placeholder="https://..."
+          onblur="saveExternalNotificationSettings()"
+        />
+      </div>
+    </div>
+
+    <div class="settings-checkbox-grid">
+      <label class="settings-checkbox">
+        <input
+          type="checkbox"
+          id="externalNotifyQueue"
+          onchange="saveExternalNotificationSettings()"
+        />
+        Queue notifications
+      </label>
+      <label class="settings-checkbox">
+        <input
+          type="checkbox"
+          id="externalNotifyAutosync"
+          onchange="saveExternalNotificationSettings()"
+        />
+        Auto-Sync notifications
+      </label>
+      <label class="settings-checkbox">
+        <input
+          type="checkbox"
+          id="externalNotifyLibrary"
+          onchange="saveExternalNotificationSettings()"
+        />
+        Library notifications
+      </label>
+      <label class="settings-checkbox">
+        <input
+          type="checkbox"
+          id="externalNotifySystem"
+          onchange="saveExternalNotificationSettings()"
+        />
+        System notifications
+      </label>
+    </div>
+
+    <div class="settings-hint">
+      Generic webhooks receive JSON. Discord, Gotify, and ntfy use payloads that match the selected target type.
     </div>
   </div>
 

@@ -270,6 +270,87 @@ function renderJobs(jobs) {
     );
     const pathMeta = renderAutosyncMetaPill("Path", dlPath, "path");
     const userMeta = renderAutosyncMetaPill("User", job.added_by || "-", "user");
+    let diffPreview = [];
+    let queuedPreview = [];
+    let skippedPreview = [];
+    try {
+      diffPreview = JSON.parse(job.last_diff_json || "[]");
+    } catch (e) {
+      diffPreview = [];
+    }
+    try {
+      queuedPreview = JSON.parse(job.last_queued_json || "[]");
+    } catch (e) {
+      queuedPreview = [];
+    }
+    try {
+      skippedPreview = JSON.parse(job.last_skipped_json || "[]");
+    } catch (e) {
+      skippedPreview = [];
+    }
+    const diffSections = [];
+    if (diffPreview.length) {
+      diffSections.push(
+        '<div class="autosync-preview-block"><span class="autosync-preview-label">Last Diff</span><div class="autosync-preview-chips">' +
+          diffPreview
+            .map(function (entry) {
+              const sample = Array.isArray(entry.missing_sample)
+                ? entry.missing_sample.slice(0, 4).join(", ")
+                : "";
+              return (
+                '<span class="autosync-preview-chip">' +
+                esc(entry.language || "Language") +
+                ": " +
+                Number(entry.missing_count || 0) +
+                " missing" +
+                (sample ? " · " + esc(sample) : "") +
+                "</span>"
+              );
+            })
+            .join("") +
+          "</div></div>",
+      );
+    }
+    if (queuedPreview.length) {
+      diffSections.push(
+        '<div class="autosync-preview-block"><span class="autosync-preview-label">Last Queued</span><div class="autosync-preview-chips">' +
+          queuedPreview
+            .map(function (entry) {
+              return (
+                '<span class="autosync-preview-chip autosync-preview-chip-success">' +
+                esc(entry.language || "Language") +
+                ": " +
+                (Array.isArray(entry.labels) ? esc(entry.labels.slice(0, 4).join(", ")) : Number(entry.queued_count || 0) + " queued") +
+                "</span>"
+              );
+            })
+            .join("") +
+          "</div></div>",
+      );
+    }
+    if (skippedPreview.length || job.last_error) {
+      const skippedHtml = skippedPreview
+        .map(function (entry) {
+          return (
+            '<span class="autosync-preview-chip autosync-preview-chip-warn">' +
+            esc(entry.language || "Language") +
+            ": " +
+            esc(entry.reason || "Skipped") +
+            "</span>"
+          );
+        })
+        .join("");
+      diffSections.push(
+        '<div class="autosync-preview-block"><span class="autosync-preview-label">Skipped / Error</span><div class="autosync-preview-chips">' +
+          skippedHtml +
+          (job.last_error
+            ? '<span class="autosync-preview-chip autosync-preview-chip-error">' +
+              esc(job.last_error) +
+              "</span>"
+            : "") +
+          "</div></div>",
+      );
+    }
 
     html +=
       '<article class="autosync-card' +
@@ -335,6 +416,9 @@ function renderJobs(jobs) {
       pathMeta +
       userMeta +
       "</div>" +
+      (diffSections.length
+        ? '<div class="autosync-card-preview">' + diffSections.join("") + "</div>"
+        : "") +
       "</div>" +
       "</article>";
   }

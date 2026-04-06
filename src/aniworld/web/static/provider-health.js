@@ -1,7 +1,9 @@
 const providerHealthList = document.getElementById("providerHealthList");
 const providerHistoryList = document.getElementById("providerHistoryList");
+const providerFailureList = document.getElementById("providerFailureList");
 let providerHealthRequest = null;
 let providerHistoryRequest = null;
+let providerFailureRequest = null;
 
 function providerHealthTone(health) {
   return health || "idle";
@@ -135,6 +137,53 @@ function renderProviderHistory(items) {
     .join("");
 }
 
+function renderProviderFailures(items) {
+  if (!providerFailureList) return;
+  if (!Array.isArray(items) || !items.length) {
+    providerFailureList.innerHTML =
+      '<div class="stats-empty">No provider failure analytics are available yet.</div>';
+    return;
+  }
+
+  providerFailureList.innerHTML = items
+    .map((item) => {
+      const reasons = Array.isArray(item.top_reasons) ? item.top_reasons : [];
+      const titles = Array.isArray(item.latest_titles) ? item.latest_titles : [];
+      return `
+        <article class="provider-failure-card">
+          <div class="provider-failure-head">
+            <div>
+              <strong>${escProviderHealth(item.provider || "Unknown")}</strong>
+              <span>${Number(item.failed_total || 0)} recent failures</span>
+            </div>
+            <span>${escProviderHealth(formatProviderDate(item.latest_failure_at))}</span>
+          </div>
+          <div class="provider-failure-reasons">
+            ${reasons.length
+              ? reasons
+                  .map(
+                    (reason) =>
+                      `<span class="provider-failure-chip" title="${escProviderHealth(
+                        reason.reason || "Unknown failure",
+                      )}">${escProviderHealth(reason.count)}x ${escProviderHealth(
+                        reason.reason || "Unknown failure",
+                      )}</span>`,
+                  )
+                  .join("")
+              : '<span class="provider-failure-chip">No parsed reasons yet</span>'}
+          </div>
+          ${
+            titles.length
+              ? `<div class="provider-failure-titles">${titles
+                  .map((title) => `<span>${escProviderHealth(title)}</span>`)
+                  .join("")}</div>`
+              : ""
+          }
+        </article>`;
+    })
+    .join("");
+}
+
 async function loadProviderHealth() {
   if (!providerHealthList) return null;
   if (providerHealthRequest) return providerHealthRequest;
@@ -175,6 +224,26 @@ async function loadProviderHistory() {
   return providerHistoryRequest;
 }
 
+async function loadProviderFailures() {
+  if (!providerFailureList) return null;
+  if (providerFailureRequest) return providerFailureRequest;
+  providerFailureRequest = (async () => {
+    try {
+      const resp = await fetch("/api/provider-health/failures");
+      const data = await resp.json();
+      renderProviderFailures(data.items || []);
+      return data.items || [];
+    } catch (e) {
+      providerFailureList.innerHTML =
+        '<div class="stats-empty">Provider failure analytics could not be loaded.</div>';
+      return null;
+    } finally {
+      providerFailureRequest = null;
+    }
+  })();
+  return providerFailureRequest;
+}
+
 function escProviderHealth(value) {
   const div = document.createElement("div");
   div.textContent = value == null ? "" : String(value);
@@ -183,11 +252,13 @@ function escProviderHealth(value) {
 
 loadProviderHealth();
 loadProviderHistory();
+loadProviderFailures();
 
 if (window.LiveUpdates && typeof window.LiveUpdates.subscribe === "function") {
   window.LiveUpdates.subscribe(["queue", "dashboard", "settings"], () => {
     loadProviderHealth();
     loadProviderHistory();
+    loadProviderFailures();
   });
 }
 
@@ -195,5 +266,6 @@ setInterval(() => {
   if (!window.LiveUpdates || !window.LiveUpdates.isConnected()) {
     loadProviderHealth();
     loadProviderHistory();
+    loadProviderFailures();
   }
 }, 30000);

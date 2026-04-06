@@ -10,6 +10,7 @@ let libraryAutosyncRequest = null;
 let libraryAutosyncUrls = new Set();
 let librarySelectedSeries = new Set();
 let librarySeriesMeta = new Map();
+let libraryRenderedTitleMap = new Map();
 
 const librarySearchInput = document.getElementById("librarySearchInput");
 const libraryLocationFilter = document.getElementById("libraryLocationFilter");
@@ -510,6 +511,169 @@ function buildTitleInsights(title) {
   };
 }
 
+function getLibraryVideoFiles(title) {
+  return (Array.isArray(title?.files) ? title.files : []).filter(function (file) {
+    const ext = String(file?.ext || "").toLowerCase();
+    return ext !== "xml" && Number(file?.episode || 0) > 0;
+  });
+}
+
+function getLibraryDuplicateGroups(title) {
+  const grouped = new Map();
+  getLibraryVideoFiles(title).forEach(function (file) {
+    const season = Number(file.season || 0);
+    const episode = Number(file.episode || 0);
+    if (!season || !episode) return;
+    const label =
+      "S" + String(season).padStart(2, "0") + "E" + String(episode).padStart(3, "0");
+    if (!grouped.has(label)) grouped.set(label, []);
+    grouped.get(label).push(file);
+  });
+  return Array.from(grouped.entries())
+    .filter(function (entry) {
+      return entry[1].length > 1;
+    })
+    .map(function (entry) {
+      const files = entry[1].slice().sort(function (a, b) {
+        return Number(b.size || 0) - Number(a.size || 0);
+      });
+      return {
+        label: entry[0],
+        files: files,
+      };
+    });
+}
+
+function buildLibraryFileInspectorHtml(title, titleKey) {
+  const files = getLibraryVideoFiles(title);
+  const duplicates = getLibraryDuplicateGroups(title);
+  const largestFiles = (Array.isArray(title?.largest_files) ? title.largest_files : [])
+    .filter(function (file) {
+      return String(file?.ext || "").toLowerCase() !== "xml";
+    })
+    .slice(0, 4);
+
+  if (!files.length && !duplicates.length && !largestFiles.length) {
+    return "";
+  }
+
+  let html = '<div class="library-file-inspector">';
+  html += '<div class="library-file-inspector-head">';
+  html += '<span class="library-missing-heading">Library File Inspector</span>';
+  html += '<div class="library-file-inspector-meta">';
+  html +=
+    '<span class="library-file-chip">' +
+    escLib(String(title.file_count || files.length) + " files") +
+    "</span>";
+  if (largestFiles.length) {
+    html +=
+      '<span class="library-file-chip">' +
+      escLib("Largest " + formatSize(largestFiles[0].size || 0)) +
+      "</span>";
+  }
+  if (duplicates.length) {
+    html +=
+      '<span class="library-file-chip library-file-chip-warning">' +
+      escLib(String(duplicates.length) + " duplicate groups") +
+      "</span>";
+  }
+  html += "</div></div>";
+
+  if (largestFiles.length) {
+    html += '<div class="library-file-list">';
+    largestFiles.forEach(function (file) {
+      html +=
+        '<div class="library-file-row">' +
+        '<span class="library-file-row-main">' +
+        escLib(file.relative_path || file.file || "Unknown file") +
+        "</span>" +
+        '<span class="library-file-row-meta">' +
+        escLib(formatSize(file.size || 0)) +
+        (file.modified_at ? " · " + escLib(formatLibraryRelativeDate(file.modified_at)) : "") +
+        "</span>" +
+        "</div>";
+    });
+    html += "</div>";
+  }
+
+  if (duplicates.length) {
+    html += '<div class="library-duplicate-box">';
+    html += '<div class="library-duplicate-head">';
+    html += '<span class="library-missing-heading">Duplicate Resolver</span>';
+    html +=
+      '<button class="btn-secondary btn-small library-duplicate-action" ' +
+      'data-title-key="' + escLib(titleKey) + '" ' +
+      'onclick="event.stopPropagation();resolveLibraryDuplicatesFromButton(this)">Resolve Duplicates</button>';
+    html += "</div>";
+    duplicates.forEach(function (group) {
+      html += '<div class="library-duplicate-group">';
+      html += '<strong>' + escLib(group.label) + "</strong>";
+      html += '<div class="library-duplicate-files">';
+      group.files.forEach(function (file, index) {
+        html +=
+          '<span class="library-duplicate-file' +
+          (index === 0 ? " is-keep" : "") +
+          '">' +
+          escLib((file.relative_path || file.file || "Unknown file") + " · " + formatSize(file.size || 0)) +
+          (index === 0 ? " (keep)" : "") +
+          "</span>";
+      });
+      html += "</div></div>";
+    });
+    html += "</div>";
+  }
+
+  html += "</div>";
+  return html;
+}
+
+async function resolveLibraryDuplicatesFromButton(button) {
+  if (!button) return;
+  const titleKey = button.dataset.titleKey || "";
+  const entry = libraryRenderedTitleMap.get(titleKey);
+  const title = entry?.title;
+  const duplicateGroups = getLibraryDuplicateGroups(title);
+  const duplicateFiles = duplicateGroups.flatMap(function (group) {
+    return group.files.map(function (file) {
+      return String(file.path || "").trim();
+    });
+  });
+  if (!duplicateFiles.length) {
+    showToast("No duplicate files were found");
+    return;
+  }
+  if (!confirm("Resolve duplicate files for this title? The largest file per episode will be kept.")) {
+    return;
+  }
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Resolving...";
+  try {
+    const resp = await fetch("/api/library/resolve-duplicates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ duplicate_files: duplicateFiles }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) {
+      showToast(data.error || "Duplicates could not be resolved");
+      return;
+    }
+    showToast(
+      Number(data.deleted || 0) > 0
+        ? `Removed ${Number(data.deleted || 0)} duplicate file(s)`
+        : "No duplicate files were removed",
+    );
+    loadLibrary();
+  } catch (e) {
+    showToast("Duplicates could not be resolved");
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
 function getLibraryLanguageLabel(langFolder) {
   if (!langFolder) return "German Dub";
   const map = {
@@ -897,6 +1061,10 @@ function renderPoster(title) {
 function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
   titles.forEach(function (title, ti) {
     var globalTi = idPrefix + "T" + ti;
+    libraryRenderedTitleMap.set(globalTi, {
+      title: title,
+      langFolder: langFolder,
+    });
     var seasonKeys = Object.keys(title.seasons).sort(function (a, b) {
       return parseInt(a) - parseInt(b);
     });
@@ -1124,6 +1292,7 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
         );
       }
       html.push("</div>");
+      html.push(buildLibraryFileInspectorHtml(title, globalTi));
     }
     var seasonPad = padLeft + 16;
     var epPad = padLeft + 32;
@@ -1218,6 +1387,7 @@ function renderTitles(html, titles, idPrefix, padLeft, locIndex, langFolder) {
 
 function renderLibrary(locations) {
   var list = document.getElementById("libraryList");
+  libraryRenderedTitleMap = new Map();
   if (!locations.length) {
     list.innerHTML =
       '<div class="library-empty">No downloaded content found</div>';

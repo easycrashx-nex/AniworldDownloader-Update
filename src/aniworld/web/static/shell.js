@@ -182,6 +182,15 @@
     }
 
     saveNotifications();
+    document.dispatchEvent(
+      new CustomEvent("aniworld:notification", {
+        detail: {
+          message: cleanMessage,
+          source: source,
+          level: options.level || "info",
+        },
+      }),
+    );
     if (notificationEntry && options.desktop !== false) {
       sendBrowserNotification(notificationEntry);
     }

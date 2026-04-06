@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Maintenance - AniWorld Downloader{% endblock %}
+{% block content %}
+<div class="settings-container insight-shell">
+  <div class="page-header">
+    <span class="eyebrow">Settings</span>
+    <h1>Maintenance</h1>
+    <p class="page-description">
+      Run upkeep tasks, inspect recent download sessions, and test providers
+      without touching the queue directly.
+    </p>
+  </div>
+
+  <section class="dashboard-panel">
+    <div class="section-heading">
+      <div>
+        <span class="section-kicker">Runtime</span>
+        <h2 class="browse-heading">Maintenance Actions</h2>
+      </div>
+      <p class="section-description">
+        Trigger cache warmups and force a provider history snapshot on demand.
+      </p>
+    </div>
+    <div class="dashboard-inline-actions maintenance-actions">
+      <button type="button" class="btn-secondary btn-small" id="maintenanceWarmCacheBtn">
+        Warm Runtime Caches
+      </button>
+      <button type="button" class="btn-secondary btn-small" id="maintenanceSnapshotBtn">
+        Snapshot Provider Scores
+      </button>
+    </div>
+    <div class="diagnostics-grid" id="maintenanceSummary">
+      <div class="stats-empty">Loading maintenance data...</div>
+    </div>
+  </section>
+
+  <section class="dashboard-panel">
+    <div class="section-heading">
+      <div>
+        <span class="section-kicker">Testing</span>
+        <h2 class="browse-heading">Provider Test Tool</h2>
+      </div>
+      <p class="section-description">
+        Resolve a provider and stream URL for a single episode without queuing a download.
+      </p>
+    </div>
+    <div class="maintenance-test-grid">
+      <input id="providerTestEpisodeUrl" type="text" placeholder="Episode URL" />
+      <input id="providerTestLanguage" type="text" placeholder="Language (for example German Dub)" value="German Dub" />
+      <input id="providerTestProvider" type="text" placeholder="Provider (for example VOE)" value="VOE" />
+      <button type="button" class="btn-secondary btn-small" id="providerTestRunBtn">Run Test</button>
+    </div>
+    <div class="diagnostics-list" id="providerTestResult">
+      <div class="stats-empty">No provider test has been run yet.</div>
+    </div>
+  </section>
+
+  <section class="dashboard-panel">
+    <div class="section-heading">
+      <div>
+        <span class="section-kicker">Sessions</span>
+        <h2 class="browse-heading">Download Session History</h2>
+      </div>
+      <p class="section-description">
+        Recent completed, failed, and cancelled sessions including duration and last errors.
+      </p>
+    </div>
+    <div class="maintenance-session-list" id="maintenanceSessionList">
+      <div class="stats-empty">Loading session history...</div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='maintenance.js') }}"></script>
+{% endblock %}

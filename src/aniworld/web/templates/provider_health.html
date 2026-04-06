@@ -41,6 +41,22 @@
       <div class="stats-empty">Loading provider score history...</div>
     </div>
   </section>
+
+  <section class="dashboard-panel">
+    <div class="section-heading">
+      <div>
+        <span class="section-kicker">Failures</span>
+        <h2 class="browse-heading">Provider Failure Analytics</h2>
+      </div>
+      <p class="section-description">
+        See the most common recent failure reasons per host without digging
+        through queue error stacks.
+      </p>
+    </div>
+    <div class="provider-failure-list" id="providerFailureList">
+      <div class="stats-empty">Loading provider failure analytics...</div>
+    </div>
+  </section>
 </div>
 {% endblock %}
 {% block scripts %}

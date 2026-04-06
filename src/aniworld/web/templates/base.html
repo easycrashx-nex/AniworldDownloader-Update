@@ -69,7 +69,7 @@
 
     {% set browse_active = request.endpoint in ['index', 'library_page', 'favorites_page'] %}
     {% set stats_active = request.endpoint in ['stats_page', 'timeline_page', 'radar_page'] %}
-    {% set settings_active = request.endpoint in ['settings_page', 'autosync_page', 'provider_health_page', 'diagnostics_page', 'audit_page'] %}
+    {% set settings_active = request.endpoint in ['settings_page', 'autosync_page', 'provider_health_page', 'diagnostics_page', 'maintenance_page', 'audit_page'] %}
 
     <div class="app-shell">
       <div class="top-bar">
@@ -220,6 +220,15 @@
                 <span class="nav-dropdown-label">Diagnostics</span>
                 <span class="nav-dropdown-note"
                   >Inspect cache state, disk guard, database size, and worker pressure.</span
+                >
+              </a>
+              <a
+                href="{{ url_for('maintenance_page') }}"
+                class="nav-dropdown-link {% if request.endpoint == 'maintenance_page' %}active{% endif %}"
+              >
+                <span class="nav-dropdown-label">Maintenance</span>
+                <span class="nav-dropdown-note"
+                  >Run upkeep actions, inspect sessions, and test providers.</span
                 >
               </a>
               <a

@@ -6,6 +6,7 @@ const experimentalFilmpalastCb = document.getElementById(
   "experimentalFilmpalast",
 );
 const experimentalSelfHealCb = document.getElementById("experimentalSelfHeal");
+const safeModeCb = document.getElementById("safeMode");
 const uiPresetSelect = document.getElementById("uiPreset");
 const uiModeSelect = document.getElementById("uiMode");
 const uiScaleSelect = document.getElementById("uiScale");
@@ -37,6 +38,21 @@ const serverVpnIpsWrap = document.getElementById("serverVpnIps");
 const serverVpnClientsWrap = document.getElementById("serverVpnClients");
 const serverVpnInterfaces = document.getElementById("serverVpnInterfaces");
 const diskGuardList = document.getElementById("diskGuardList");
+const externalNotificationsEnabledCb = document.getElementById(
+  "externalNotificationsEnabled",
+);
+const externalNotificationTypeSelect = document.getElementById(
+  "externalNotificationType",
+);
+const externalNotificationUrlInput = document.getElementById(
+  "externalNotificationUrl",
+);
+const externalNotifyQueueCb = document.getElementById("externalNotifyQueue");
+const externalNotifyAutosyncCb = document.getElementById(
+  "externalNotifyAutosync",
+);
+const externalNotifyLibraryCb = document.getElementById("externalNotifyLibrary");
+const externalNotifySystemCb = document.getElementById("externalNotifySystem");
 const browserNotificationsEnabledCb = document.getElementById(
   "browserNotificationsEnabled",
 );
@@ -306,6 +322,21 @@ function renderVpnInterfaces(data) {
     .join("");
 }
 
+function updateExternalNotificationState() {
+  const enabled = !!externalNotificationsEnabledCb?.checked;
+  [
+    externalNotificationTypeSelect,
+    externalNotificationUrlInput,
+    externalNotifyQueueCb,
+    externalNotifyAutosyncCb,
+    externalNotifyLibraryCb,
+    externalNotifySystemCb,
+  ].forEach((field) => {
+    if (!field) return;
+    field.disabled = !enabled;
+  });
+}
+
 function browserNotificationsSupported() {
   return typeof window !== "undefined" && "Notification" in window;
 }
@@ -397,6 +428,33 @@ async function loadSettings() {
       if (experimentalSelfHealCb) {
         experimentalSelfHealCb.checked = data.experimental_self_heal === "1";
       }
+      if (safeModeCb) {
+        safeModeCb.checked = data.safe_mode === "1";
+      }
+      if (externalNotificationsEnabledCb) {
+        externalNotificationsEnabledCb.checked =
+          data.external_notifications_enabled === "1";
+      }
+      if (externalNotificationTypeSelect) {
+        externalNotificationTypeSelect.value =
+          data.external_notification_type || "generic";
+      }
+      if (externalNotificationUrlInput) {
+        externalNotificationUrlInput.value = data.external_notification_url || "";
+      }
+      if (externalNotifyQueueCb) {
+        externalNotifyQueueCb.checked = data.external_notify_queue !== "0";
+      }
+      if (externalNotifyAutosyncCb) {
+        externalNotifyAutosyncCb.checked = data.external_notify_autosync !== "0";
+      }
+      if (externalNotifyLibraryCb) {
+        externalNotifyLibraryCb.checked = data.external_notify_library !== "0";
+      }
+      if (externalNotifySystemCb) {
+        externalNotifySystemCb.checked = data.external_notify_system !== "0";
+      }
+      updateExternalNotificationState();
       if (uiPresetSelect) uiPresetSelect.value = data.ui_preset || "custom";
       if (uiModeSelect) uiModeSelect.value = data.ui_mode || "cozy";
       if (uiScaleSelect) uiScaleSelect.value = data.ui_scale || "100";
@@ -658,6 +716,39 @@ async function saveExperimentalSelfHeal() {
     );
   } catch (e) {
     showToast("Failed to save self-heal setting: " + e.message);
+  }
+}
+
+async function saveSafeMode() {
+  if (!safeModeCb) return;
+  try {
+    await updateSettings({
+      safe_mode: safeModeCb.checked,
+    });
+    showToast("Safe mode " + (safeModeCb.checked ? "enabled" : "disabled"));
+  } catch (e) {
+    showToast("Failed to save safe mode: " + e.message);
+  }
+}
+
+async function saveExternalNotificationSettings() {
+  updateExternalNotificationState();
+  try {
+    await updateSettings({
+      external_notifications_enabled:
+        externalNotificationsEnabledCb?.checked || false,
+      external_notification_type:
+        externalNotificationTypeSelect?.value || "generic",
+      external_notification_url:
+        String(externalNotificationUrlInput?.value || "").trim(),
+      external_notify_queue: externalNotifyQueueCb?.checked || false,
+      external_notify_autosync: externalNotifyAutosyncCb?.checked || false,
+      external_notify_library: externalNotifyLibraryCb?.checked || false,
+      external_notify_system: externalNotifySystemCb?.checked || false,
+    });
+    showToast("External notification settings saved");
+  } catch (e) {
+    showToast("Failed to save external notifications: " + e.message);
   }
 }
 
