@@ -26,6 +26,8 @@ HLS_PATTERN = re.compile(r"""["']hls["']\s*:\s*["'](?P<hls>[^"']+)["']""")
 M3U8_PATTERN = re.compile(r"""https?://[^'"<>\s\\]+\.m3u8[^'"<>\s\\]*""")
 FILE_PATTERN = re.compile(r"""["']file["']\s*:\s*["'](?P<file>https?://[^"']+)["']""")
 SOURCE_PATTERN = re.compile(r"""["']source["']\s*:\s*["'](?P<source>https?://[^"']+)["']""")
+SRC_PATTERN = re.compile(r"""["']src["']\s*:\s*["'](?P<src>https?://[^"']+)["']""")
+MP4_PATTERN = re.compile(r"""https?://[^'"<>\s\\]+\.mp4[^'"<>\s\\]*""")
 VOE_SCRIPT_PATTERN = re.compile(
     r'<script type="application/json">\s*"(?:\\.|[^"\\])*"\s*</script>', re.DOTALL
 )
@@ -82,9 +84,11 @@ def extract_voe_source_from_html(html):
         # Newer/alternate VOE pages sometimes expose the HLS URL directly.
         for pattern_name, pattern in (
             ("m3u8", M3U8_PATTERN),
+            ("mp4", MP4_PATTERN),
             ("hls", HLS_PATTERN),
             ("file", FILE_PATTERN),
             ("source", SOURCE_PATTERN),
+            ("src", SRC_PATTERN),
         ):
             match = pattern.search(html)
             if match:
@@ -134,6 +138,108 @@ def extract_voe_source_from_html(html):
         return None
     except Exception:
         return None
+
+
+def _looks_like_stream_url(url: str) -> bool:
+    clean = str(url or "").strip().lower()
+    if not clean.startswith("http"):
+        return False
+    return any(
+        marker in clean
+        for marker in (".m3u8", ".mp4", "master.m3u8", "playlist.m3u8", "/hls/", "/mp4/")
+    )
+
+
+def _browser_capture_voe_source(candidate_urls, timeout=30):
+    urls = [str(url or "").strip() for url in (candidate_urls or []) if str(url or "").strip()]
+    if not urls:
+        return None
+
+    try:
+        from patchright.sync_api import sync_playwright
+    except ImportError:
+        logger.debug("patchright not installed, skipping browser VOE fallback")
+        return None
+
+    def _inject_cookies(context, current_url: str) -> None:
+        try:
+            base = f"{urlparse(current_url).scheme}://{urlparse(current_url).netloc}"
+            cookies = []
+            for cookie in getattr(GLOBAL_SESSION, "cookies", []):
+                name = getattr(cookie, "name", None)
+                value = getattr(cookie, "value", None)
+                if not name or value is None:
+                    continue
+                cookies.append({"name": name, "value": value, "url": base})
+            if cookies:
+                context.add_cookies(cookies)
+        except Exception:
+            pass
+
+    headers = PROVIDER_HEADERS_D.get("VOE", {"User-Agent": DEFAULT_USER_AGENT})
+    detected = {"url": None}
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            context = browser.new_context(
+                user_agent=headers.get("User-Agent") or DEFAULT_USER_AGENT,
+                viewport={"width": 1280, "height": 720},
+            )
+            page = context.new_page()
+
+            def _capture_response(response):
+                try:
+                    candidate = str(response.url or "").strip()
+                    if _looks_like_stream_url(candidate):
+                        detected["url"] = candidate
+                        return
+                    content_type = (
+                        str(response.headers.get("content-type") or "").lower()
+                    )
+                    if any(
+                        marker in content_type
+                        for marker in (
+                            "application/vnd.apple.mpegurl",
+                            "application/x-mpegurl",
+                            "video/",
+                        )
+                    ) and candidate.startswith("http"):
+                        detected["url"] = candidate
+                except Exception:
+                    pass
+
+            page.on("response", _capture_response)
+
+            for current_url in urls:
+                _inject_cookies(context, current_url)
+                page.goto(current_url, wait_until="domcontentloaded", timeout=timeout * 1000)
+                page.wait_for_timeout(3000)
+
+                if detected["url"]:
+                    browser.close()
+                    return detected["url"]
+
+                html = page.content()
+                if is_captcha_page(html):
+                    browser.close()
+                    solve_captcha(current_url)
+                    return None
+
+                source = extract_voe_source_from_html(html)
+                if source:
+                    browser.close()
+                    return source
+
+            browser.close()
+    except Exception as exc:
+        logger.debug("Browser VOE fallback failed: %s", exc)
+        return None
+
+    return detected["url"]
 
 
 # -----------------------------
@@ -193,6 +299,7 @@ def get_direct_link_from_voe(embeded_voe_link, headers=None, max_retries=3, time
                 return source
 
             # Fallback: follow the redirect URL embedded in the page
+            redirect_url = ""
             redirect_match = REDIRECT_PATTERN.search(html)
             if redirect_match:
                 redirect_url = redirect_match.group(0)
@@ -228,6 +335,11 @@ def get_direct_link_from_voe(embeded_voe_link, headers=None, max_retries=3, time
                         continue
 
             source = extract_voe_source_from_html(html)
+            if not source:
+                source = _browser_capture_voe_source(
+                    [redirect_url, embeded_voe_link],
+                    timeout=timeout,
+                )
             if not source:
                 raise ValueError("No VOE video source found in page.")
 
